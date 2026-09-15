@@ -1,0 +1,7 @@
+# Optional: the live browser voice leg (sanwaad/voice/agent.py).
+# Not needed for the demo, the console, the evals or the tests.
+-r requirements.txt
+pipecat-ai==0.0.108
+pipecat-murf-tts==0.2.1
+sarvamai==0.1.26
+aiortc==1.15.0

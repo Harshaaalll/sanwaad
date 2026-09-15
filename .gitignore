@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Secrets
+.env
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+
+# Runtime state: rebuilt or regenerated on first run
+sanwaad/data/*
+!sanwaad/data/.gitkeep

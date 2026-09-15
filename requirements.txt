@@ -1,0 +1,17 @@
+# Sanwaad core: the graph, the console, retrieval, the evals and the tests.
+# Everything here runs offline; add GOOGLE_API_KEY to .env for real Gemini models.
+fastapi==0.139.0
+uvicorn==0.50.2
+pydantic==2.13.4
+python-dotenv==1.2.2
+loguru==0.7.3
+numpy==2.4.6
+langgraph==1.2.11
+langgraph-checkpoint-sqlite==3.1.1
+fastembed==0.8.0
+google-genai==1.75.0
+asyncpraw==8.0.3
+
+# tests
+pytest==9.1.1
+pytest-asyncio==1.4.0

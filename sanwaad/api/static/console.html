@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sanwaad — Review Console</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e9ef; --dim:#9aa4b6;
+    --accent:#5b9dff; --warn:#f0b429; --ok:#3ecf8e; --bad:#f0616d; --mono: ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex;
+           align-items:center; gap:16px; position:sticky; top:0; background:var(--bg); z-index:5; }
+  h1 { font-size:15px; margin:0; letter-spacing:.02em; }
+  h1 span { color:var(--dim); font-weight:400; }
+  button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+           border-radius:7px; padding:7px 13px; cursor:pointer; font-size:13px; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#04101f; font-weight:600; }
+  button.danger { border-color:var(--bad); color:var(--bad); }
+  .wrap { display:grid; grid-template-columns:340px 1fr; gap:0; height:calc(100vh - 53px); }
+  .list { border-right:1px solid var(--line); overflow-y:auto; }
+  .case { padding:12px 16px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .case:hover { background:var(--panel); }
+  .case.sel { background:var(--panel); box-shadow:inset 3px 0 0 var(--accent); }
+  .case .who { font-family:var(--mono); font-size:12px; color:var(--dim); }
+  .case .txt { margin:5px 0; max-height:3.2em; overflow:hidden; }
+  .detail { overflow-y:auto; padding:22px 26px; }
+  .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:99px;
+          border:1px solid var(--line); color:var(--dim); margin-right:5px; font-family:var(--mono); }
+  .pill.s4,.pill.s5 { color:var(--bad); border-color:var(--bad); }
+  .pill.s3 { color:var(--warn); border-color:var(--warn); }
+  .pill.ok { color:var(--ok); border-color:var(--ok); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:16px; margin-bottom:16px; }
+  .card h3 { margin:0 0 10px; font-size:12px; text-transform:uppercase;
+             letter-spacing:.08em; color:var(--dim); font-weight:600; }
+  textarea { width:100%; min-height:110px; background:var(--bg); color:var(--fg);
+             border:1px solid var(--line); border-radius:8px; padding:11px; font:inherit; resize:vertical; }
+  .clause { font-family:var(--mono); font-size:12px; padding:6px 0; border-bottom:1px solid var(--line); }
+  .clause b { color:var(--accent); }
+  .row { display:flex; gap:9px; flex-wrap:wrap; align-items:center; }
+  .timeline { font-family:var(--mono); font-size:12px; }
+  .timeline div { padding:4px 0; border-bottom:1px solid var(--line); color:var(--dim); }
+  .timeline b { color:var(--fg); display:inline-block; min-width:110px; }
+  .quote { border-left:2px solid var(--line); padding-left:12px; color:var(--dim); white-space:pre-wrap; }
+  .cost { font-family:var(--mono); font-size:20px; color:var(--ok); }
+  .muted { color:var(--dim); }
+  a { color:var(--accent); }
+  .action { padding:10px 0; border-top:1px solid rgba(127,127,127,.22); }
+  .action:first-of-type { border-top:0; }
+  .checks { font-size:12px; line-height:1.55; opacity:.9; }
+  .approve { display:block; margin-top:8px; font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>संवाद <span>Sanwaad — grievance review</span></h1>
+  <button onclick="ingest()">Ingest mock feed</button>
+  <button onclick="load()">Refresh</button>
+  <span id="status" class="muted"></span>
+</header>
+
+<div class="wrap">
+  <div class="list" id="list"></div>
+  <div class="detail" id="detail"><p class="muted">Select a case, or ingest the mock feed to begin.</p></div>
+</div>
+
+<script>
+let cases = [], selected = null;
+
+const esc = s => (s ?? "").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const status = m => document.getElementById("status").textContent = m;
+
+async function ingest() {
+  status("ingesting…");
+  const r = await fetch("/api/ingest", {method:"POST", headers:{"Content-Type":"application/json"},
+                                        body: JSON.stringify({channel:"mock", limit:8})});
+  const d = await r.json();
+  status(`ingested ${d.ingested}`);
+  load();
+}
+
+async function load() {
+  const d = await (await fetch("/api/cases")).json();
+  cases = d.cases;
+  document.getElementById("list").innerHTML = cases.map(c => {
+    const t = c.triage || {};
+    const v = c.verdict || {}, p = c.pattern || {}, pr = c.priority || {};
+    const done = c.closure ? "ok" : "";
+    return `<div class="case ${selected===c.case_id?'sel':''}" onclick="open_('${c.case_id}')">
+      <div class="who">${esc(c.complaint?.author)} · ${esc(c.complaint?.channel)}
+        ${c.complaint && c.complaint.tagged === false ? '<span class="pill">untagged</span>' : ''}</div>
+      <div class="txt">${esc(c.complaint?.text)}</div>
+      ${p.level === "crisis" ? `<span class="pill s5">crisis · ${p.cluster_size}</span>` :
+        (p.level === "watch" ? `<span class="pill s3">watch · ${p.cluster_size}</span>` : '')}
+      <span class="pill s${t.severity||1}">sev ${t.severity ?? "?"}</span>
+      <span class="pill">${esc(t.category||"…")}</span>
+      ${v.author_class && v.author_class !== "customer" ?
+        `<span class="pill">${esc(v.author_class)}</span>` : ''}
+      ${pr.tier === "ignore" ? '<span class="pill">logged only</span>' : ''}
+      ${c.closure ? '<span class="pill ok">closed</span>' :
+        (c.review ? '<span class="pill">in flight</span>' : '<span class="pill s3">needs review</span>')}
+    </div>`;
+  }).join("") || '<p class="muted" style="padding:16px">No cases yet.</p>';
+}
+
+async function open_(id) {
+  selected = id; load();
+  const c = await (await fetch(`/api/cases/${id}`)).json();
+  const s = c.state, t = s.triage||{}, d = s.draft||{}, g = s.grounding||{};
+  const v = s.verdict||{}, pat = s.pattern||{}, pri = s.priority||{};
+  const pending = c.pending || null;
+  const awaitingVoice = pending && pending.await === "voice_call";
+  const awaitingReview = pending && !awaitingVoice;
+  const cl = s.closure;
+
+  document.getElementById("detail").innerHTML = `
+    <div class="row" style="margin-bottom:14px">
+      <span class="pill s${t.severity||1}">severity ${t.severity}</span>
+      <span class="pill">${esc(t.category)}</span>
+      <span class="pill">${esc(t.sentiment)}</span>
+      <span class="pill">reply in ${esc(t.language)}</span>
+      ${g.grounded ? '<span class="pill ok">grounded</span>' : '<span class="pill s4">ungrounded</span>'}
+    </div>
+
+    <div class="card"><h3>Who is speaking, and how many of them</h3>
+      <div class="row" style="margin-bottom:10px">
+        <span class="pill">${esc(v.author_class||"?")}</span>
+        <span class="pill">authenticity ${v.authenticity ?? "?"}</span>
+        <span class="pill">reach ${(v.reach ?? 0).toLocaleString()}</span>
+        ${v.history_with_brand ? `<span class="pill">${v.history_with_brand} prior case(s)</span>` : ''}
+        ${v.reply_worthy === false ? '<span class="pill s4">not answered</span>' : ''}
+        ${pat.level && pat.level !== "none" ?
+          `<span class="pill ${pat.level==='crisis'?'s5':'s3'}">${esc(pat.level)} ·
+            ${pat.cluster_size} people · ${pat.velocity_per_hour}/hr</span>` : ''}
+        ${pri.tier ? `<span class="pill">${esc(pri.tier)}</span>` : ''}
+      </div>
+      ${(v.evidence||[]).length ?
+        `<p class="muted" style="margin:0;font-size:12px">${esc((v.evidence||[]).join(" · "))}</p>` : ''}
+      ${pat.theme ? `<p class="muted" style="margin:6px 0 0;font-size:12px">theme — ${esc(pat.theme)}</p>` : ''}
+    </div>
+
+    <div class="card"><h3>Customer said</h3>
+      <div class="quote">${esc(s.complaint?.text)}</div>
+      <p class="muted" style="margin:10px 0 0;font-size:12px">${esc(t.summary)}</p>
+    </div>
+
+    ${awaitingReview ? `
+    <div class="card"><h3>Draft reply — needs you</h3>
+      <p class="muted" style="margin:-4px 0 10px;font-size:12px">Held because: ${esc(pending.reason)}</p>
+      <textarea id="draft">${esc(d.text)}</textarea>
+      ${(g.unsupported_claims||[]).length ? `<p style="color:var(--bad);font-size:12px">
+         Unsupported: ${g.unsupported_claims.map(esc).join(" · ")}</p>` : ""}
+      <div class="row" style="margin-top:11px">
+        <button class="primary" onclick="review('${id}','approve')">Approve &amp; post</button>
+        <button onclick="review('${id}','edit')">Post my edit</button>
+        <button class="danger" onclick="review('${id}','reject')">Reject</button>
+      </div>
+    </div>` : `
+    <div class="card"><h3>Public reply</h3>
+      <div class="quote">${esc((s.review||{}).final_text || d.text)}</div>
+      ${s.review ? `<p class="muted" style="font-size:12px;margin:9px 0 0">
+        ${s.review.auto ? "auto-approved" : "reviewed by " + esc(s.review.reviewer)} — ${esc(s.review.note)}</p>`:""}
+    </div>`}
+
+    ${(s.actions||[]).length ? `
+    <div class="card"><h3>Proposed actions${awaitingReview ? " — approve each one separately" : ""}</h3>
+      ${(s.actions||[]).map(a => {
+        const p = a.proposal, v = a.validation;
+        const res = (s.action_results||[]).find(r => r.action_id === p.id);
+        const canApprove = awaitingReview && p.risk === "write_high" && v.ok;
+        return `<div class="action">
+          <div class="row">
+            <span class="pill ${v.ok ? 'ok' : 's5'}">${v.ok ? 'valid' : 'blocked'}</span>
+            <span class="pill">${esc(p.kind)}</span>
+            <span class="pill">${esc(p.risk.replace('_', ' '))}</span>
+            ${p.reference ? `<b>${esc(p.reference)}</b>` : ''}
+            ${p.amount_inr ? `₹${Number(p.amount_inr).toLocaleString('en-IN')}` : ''}
+            ${res ? `<span class="pill ${res.status === 'executed' ? 'ok' : 's3'}">${esc(res.status)}</span>` : ''}
+          </div>
+          <p class="muted" style="margin:6px 0;font-size:12px">${esc(p.reason)} · proposed by ${esc(p.proposed_by)}</p>
+          <div class="checks">${v.checks.map(c =>
+            `<div>${c.passed ? '✓' : '✗'} <b>${esc(c.name)}</b> ${esc(c.detail)}</div>`).join("")}</div>
+          ${canApprove ? `<label class="approve"><input type="checkbox" class="act-approve"
+             data-id="${esc(p.id)}"> Approve this exact ${esc(p.kind)}</label>` : ''}
+          ${res && res.detail ? `<p class="muted" style="font-size:12px;margin:6px 0 0">${esc(res.detail)}</p>` : ''}
+        </div>`;
+      }).join("")}
+    </div>` : ""}
+
+    ${awaitingVoice ? `
+    <div class="card"><h3>Voice escalation pending</h3>
+      <p style="margin:0 0 10px">${(s.escalation?.reasons||[]).map(esc).join("<br>")}</p>
+      <a href="/call/${id}" target="_blank"><button class="primary">Open browser call</button></a>
+      <button onclick="skipVoice('${id}')">Mark call skipped</button>
+    </div>` : ""}
+
+    <div class="card"><h3>Policy clauses behind this reply</h3>
+      ${(s.citations||[]).slice(0,8).map(c =>
+        `<div class="clause"><b>${esc(c.clause_id)}</b> ${esc(c.heading)}</div>`).join("")}
+    </div>
+
+    ${cl ? `
+    <div class="card"><h3>Closure</h3>
+      <div class="cost">₹${cl.total_cost_inr.toFixed(4)}</div>
+      <p class="muted" style="margin:2px 0 12px;font-size:12px">
+        cost to resolve · ${cl.llm_calls} LLM calls · vs ~₹18–85 for a human</p>
+      <h3>Consistency receipt</h3>
+      <p style="margin:0">${cl.consistency.consistent
+        ? '<span class="pill ok">channels agree</span>'
+        : '<span class="pill s5">CHANNELS DIVERGED</span>'}</p>
+      <div class="clause" style="margin-top:8px">shared: <b>${cl.consistency.shared_clauses.join(", ")||"—"}</b></div>
+      <div class="clause">text only: ${cl.consistency.text_only.join(", ")||"—"}</div>
+      <div class="clause">voice only: ${cl.consistency.voice_only.join(", ")||"—"}</div>
+    </div>` : ""}
+
+    <div class="card"><h3>Timeline</h3>
+      <div class="timeline">${(s.events||[]).map(e =>
+        `<div><b>${esc(e.stage)}</b> ${esc(e.message)}</div>`).join("")}</div>
+    </div>`;
+}
+
+async function review(id, decision) {
+  const ta = document.getElementById("draft");
+  status("submitting…");
+  await fetch(`/api/cases/${id}/review`, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({decision, final_text: ta ? ta.value : null, reviewer:"you",
+      actions: Object.fromEntries([...document.querySelectorAll(".act-approve")]
+        .map(cb => [cb.dataset.id, cb.checked ? "approve" : "reject"]))})});
+  status("done"); open_(id); load();
+}
+
+async function skipVoice(id) {
+  await fetch(`/api/cases/${id}/voice-outcome`, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({happened:false, channel:"none", resolved:false, summary:"call skipped"})});
+  open_(id); load();
+}
+
+load();
+</script>
+</body>
+</html>

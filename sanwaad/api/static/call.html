@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sanwaad — Callback</title>
+<style>
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0f1115; color:#e6e9ef;
+         font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  .box { width:min(440px,92vw); text-align:center; padding:34px; border:1px solid #262b36;
+         border-radius:14px; background:#171a21; }
+  h1 { font-size:17px; margin:0 0 6px; }
+  p { color:#9aa4b6; font-size:13px; }
+  button { margin-top:18px; padding:13px 26px; border-radius:9px; border:0; cursor:pointer;
+           background:#5b9dff; color:#04101f; font-weight:600; font-size:15px; }
+  button:disabled { opacity:.5; cursor:default; }
+  #state { margin-top:16px; font-family:ui-monospace,Menlo,monospace; font-size:12px; color:#3ecf8e; }
+  code { color:#5b9dff; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>NimbusPay is calling you back</h1>
+  <p>About your complaint <code>__CASE_ID__</code>.<br>
+     Your microphone is used only for this call.</p>
+  <button id="go" onclick="start()">Start call</button>
+  <div id="state"></div>
+  <audio id="audio" autoplay></audio>
+</div>
+<script>
+const CASE_ID = "__CASE_ID__";
+const say = m => document.getElementById("state").textContent = m;
+
+async function start() {
+  const btn = document.getElementById("go");
+  btn.disabled = true;
+  say("requesting microphone…");
+
+  const pc = new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
+  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+  stream.getTracks().forEach(t => pc.addTrack(t, stream));
+  pc.addTransceiver("audio", {direction:"recvonly"});
+
+  pc.ontrack = e => { document.getElementById("audio").srcObject = e.streams[0]; };
+  pc.onconnectionstatechange = () => say("connection: " + pc.connectionState);
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  // Wait for ICE gathering so a single non-trickle offer carries all candidates.
+  await new Promise(res => {
+    if (pc.iceGatheringState === "complete") return res();
+    pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && res();
+    setTimeout(res, 2500);
+  });
+
+  say("connecting…");
+  const r = await fetch("/api/offer", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({case_id: CASE_ID, sdp: pc.localDescription.sdp, type: pc.localDescription.type})});
+  if (!r.ok) { say("failed: " + await r.text()); btn.disabled = false; return; }
+  await pc.setRemoteDescription(await r.json());
+  say("connected — say hello");
+}
+</script>
+</body>
+</html>
