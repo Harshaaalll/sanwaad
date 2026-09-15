@@ -129,6 +129,20 @@ AGENTS: dict[str, AgentSpec] = {s.name: s for s in [
           "step", "none",
           reads=["costs", "draft", "voice", "escalation", "action_results"],
           writes=["closure"]),
+
+    # --- the support loop (sanwaad/loop) -----------------------------------
+    # Not graph nodes: they write no case state. Their contracts still bound
+    # what they may call, which is the part of a contract that matters in a loop.
+    _spec("resolver", "Support loop: act, observe, verify, retry — until done or handed over",
+          "agent", "loop tier, one decision per pass",
+          reads=[], writes=[],
+          tools=["lookup_transaction", "reversal_status", "search_policy", "open_ticket"],
+          output="FinalAnswer"),
+    _spec("policy_subagent", "Answer one policy question in a clean, scoped context",
+          "agent", "retrieval, then the draft tier; returns only an answer and clause ids",
+          reads=[], writes=[],
+          tools=["search_policy"],
+          output="SubAgentResult"),
 ]}
 
 

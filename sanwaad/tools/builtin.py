@@ -1,7 +1,9 @@
-"""The four tools Sanwaad's agents may call, one per rung of the risk ladder.
+"""The tools Sanwaad's agents may call, on every rung of the risk ladder.
 
-    lookup_transaction   READ        plan
-    open_ticket          WRITE_LOW   act       idempotent, no approval
+    lookup_transaction   READ        plan, resolver
+    reversal_status      READ        resolver                 scoped to the author
+    search_policy        READ        resolver, policy_subagent   snippets, not clauses
+    open_ticket          WRITE_LOW   act, resolver  idempotent, no approval
     post_reply           WRITE_HIGH  publish   approvable by the auto-post policy
     initiate_reversal    WRITE_HIGH  act       approvable only by a human
 
@@ -18,6 +20,9 @@ Two contract details worth copying:
 
 from __future__ import annotations
 
+import asyncio
+import math
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -185,4 +190,95 @@ REGISTRY.register(ToolSpec(
     input_model=InitiateReversalIn, output_model=InitiateReversalOut,
     handler=_initiate_reversal, risk=Risk.WRITE_HIGH,
     timeout_s=10.0, max_retries=1, idempotent=True, auto_approvable=False,
+))
+
+
+# ---------------------------------------------------------------------------
+# Read tools for the support loop
+# ---------------------------------------------------------------------------
+
+class ReversalStatusIn(BaseModel):
+    handle: str = Field(min_length=2, max_length=64,
+                        description="The customer's handle. Supplied by the system.")
+    reference: str = Field(pattern=_REFERENCE)
+
+
+class ReversalStatusOut(BaseModel):
+    reference: str
+    found: bool
+    reversal_id: Optional[str] = None
+    status: Literal["none", "initiated", "credited"] = "none"
+    eta_hours: Optional[int] = None
+
+
+async def _reversal_status(args: ReversalStatusIn) -> ReversalStatusOut:
+    txn = BACKEND.get(args.reference)
+    # Someone else's reversal is indistinguishable from no reversal. Answering
+    # "that belongs to another account" would confirm the reference exists.
+    if txn is None or txn.handle != args.handle:
+        return ReversalStatusOut(reference=args.reference, found=False)
+    record = BACKEND.reversal_for(args.reference)
+    if record is None:
+        return ReversalStatusOut(reference=args.reference, found=False)
+    started = datetime.fromisoformat(record["at"])
+    elapsed_h = (datetime.now(timezone.utc) - started).total_seconds() / 3600
+    if elapsed_h >= 24:
+        return ReversalStatusOut(reference=args.reference, found=True,
+                                 reversal_id=record["reversal_id"], status="credited")
+    return ReversalStatusOut(reference=args.reference, found=True,
+                             reversal_id=record["reversal_id"], status="initiated",
+                             eta_hours=max(1, math.ceil(24 - elapsed_h)))
+
+
+class SearchPolicyIn(BaseModel):
+    query: str = Field(min_length=3, max_length=300)
+    k: int = Field(default=3, ge=1, le=5)
+
+
+class PolicyHit(BaseModel):
+    clause_id: str
+    heading: str
+    snippet: str = Field(max_length=240)
+
+
+class SearchPolicyOut(BaseModel):
+    results: list[PolicyHit]
+
+
+def _snippet(text: str, limit: int = 240) -> str:
+    """The first sentences of a clause, up to a hard cap. A tool that returns
+    whole clauses into a loop is a tool that fills the window by itself."""
+    flat = " ".join((text or "").split())
+    if len(flat) <= limit:
+        return flat
+    cut = flat[:limit - 1]
+    stop = cut.rfind(". ")
+    return (cut[:stop + 1] if stop > 80 else cut.rstrip()) + ("" if stop > 80 else "…")
+
+
+async def _search_policy(args: SearchPolicyIn) -> SearchPolicyOut:
+    from ..rag.store import get_store
+
+    # Embedding is CPU work; off the event loop so the registry's timeout means
+    # something and other loops keep moving.
+    hits = await asyncio.to_thread(get_store().search_fused, args.query, args.k)
+    return SearchPolicyOut(results=[
+        PolicyHit(clause_id=c.clause_id, heading=c.heading, snippet=_snippet(c.text)) for c in hits
+    ])
+
+
+REGISTRY.register(ToolSpec(
+    name="reversal_status",
+    description="Status of the reversal for one of the customer's own transactions.",
+    input_model=ReversalStatusIn, output_model=ReversalStatusOut,
+    handler=_reversal_status, risk=Risk.READ,
+    timeout_s=3.0, max_retries=2, idempotent=True,
+))
+
+REGISTRY.register(ToolSpec(
+    name="search_policy",
+    description="Search the written support policy. Returns clause ids, headings and short snippets.",
+    input_model=SearchPolicyIn, output_model=SearchPolicyOut,
+    handler=_search_policy, risk=Risk.READ,
+    timeout_s=15.0, max_retries=1, idempotent=True,
 ))

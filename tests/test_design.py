@@ -27,6 +27,7 @@ from sanwaad.tools import REGISTRY, ErrorCode, Risk, ToolError, ToolFailure, Too
 from sanwaad.tools import ledger as ledger_mod
 from sanwaad.tools import registry as registry_mod
 from sanwaad.tools.builtin import LookupTransactionIn, LookupTransactionOut, PostReplyIn, PostReplyOut
+from sanwaad.loop import kernel as kernel_mod
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +36,7 @@ def _sealed(tmp_path, monkeypatch):
     monkeypatch.setattr(obs.TRACER, "enabled", False)
     monkeypatch.setattr(registry_mod, "AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(ledger_mod.BACKEND, "path", tmp_path / "backend.json")
+    monkeypatch.setattr(kernel_mod, "LOOP_RUNS_PATH", tmp_path / "loop_runs.jsonl")
     REGISTRY.clear_faults()
     yield
     REGISTRY.clear_faults()
@@ -432,7 +434,7 @@ def test_prune_removes_only_what_retention_allows(tmp_path, monkeypatch):
 def test_every_memory_tier_states_its_model_exposure_and_personal_data():
     from sanwaad.memory import MEMORY_MAP
 
-    assert len(MEMORY_MAP) == 8
+    assert len(MEMORY_MAP) == 10
     assert all(t.reaches_model and t.personal_data and t.why for t in MEMORY_MAP)
 
 

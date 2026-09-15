@@ -8,6 +8,11 @@ The lessons follow the building blocks in Aishwarya Srinivasan's talk on
 agentic AI system design ([video](https://youtu.be/mwN75EiGfCE)). Here each
 idea is shown working in real code rather than restated.
 
+**Two parts.** Part I (lessons 1–12) covers the building blocks of a production
+agentic system. Part II (lessons 13–20) covers loop engineering: designing the
+cycle an agent runs inside, rather than the steps you would once have written
+by hand.
+
 **How to use this guide.** For each lesson, read the idea, open the files it
 points to, run the command, then answer the check question before you expand
 the answer.
@@ -18,6 +23,8 @@ python -m sanwaad.demo                 # the whole system, no API key needed
 python -m sanwaad.evals.trajectory     # grade every step of 15 scenarios
 python -m sanwaad.memory               # what is remembered, where, for how long
 python -m sanwaad.router               # which model runs each step, and its fallback
+python -m sanwaad.loop                 # Part II: watch the support loop, pass by pass
+python -m sanwaad.evals.loop_eval --ladder   # Part II: what each MINT layer buys
 pytest tests/ -q
 ```
 
@@ -667,3 +674,459 @@ Each exercise extends a real building block. Write the test first.
    case runs, so a reviewer sees "checking the ledger…" instead of waiting.
 6. **Move traces to OpenTelemetry.** Only `Tracer._write` should need to change.
    If any call site has to change too, the abstraction was wrong.
+
+
+---
+---
+
+# Part II — Loop engineering
+
+Part I built a system where code decides every step and models make judgements
+inside them. Part II adds a genuinely looping agent to Sanwaad: a private
+support conversation where the model chooses each action, and Sanwaad's job is
+the loop around it. Nothing in Part II repeats Part I. Where an idea builds on
+an earlier lesson, it points back instead.
+
+Part II follows Aishwarya Srinivasan's talk on loop engineering
+([video](https://www.youtube.com/watch?v=aUpyza-DSMs)), including the three
+nested loops and four agentic design patterns she attributes to Andrew Ng.
+The running example is hers too: a support agent answering order and refund
+questions.
+
+```bash
+python -m sanwaad.loop                       # five conversations, pass by pass
+python -m sanwaad.evals.loop_eval            # 13 system-level scenarios at the top rung
+python -m sanwaad.evals.loop_eval --ladder   # the same scenarios at every MINT rung
+python -m sanwaad.loop.outer                 # the external loop over recorded runs
+```
+
+| # | Idea | Where it lives |
+|---|---|---|
+| 13 | From prompts to context to loops | `loop/kernel.py`, `loop/policy.py` |
+| 14 | Stopping conditions and loop economics | `loop/budget.py` |
+| 15 | Harness engineering and system-level evaluation | `evals/loop_eval.py`, `loop/outer.py` |
+| 16 | Context rot | `loop/window.py`, `loop/subagent.py` |
+| 17 | Verification asymmetry | `loop/verify.py` |
+| 18 | MINT: Minimal Intelligence, Necessary Tools | `loop/mint.py`, `loop/support.py` |
+| 19 | The three nested loops | `loop/outer.py` |
+| 20 | The four agentic design patterns | everywhere, mapped |
+
+---
+
+## Lesson 13 — From prompts to context to loops
+
+**The idea.** The highest-leverage skill has moved twice. First it was prompt
+engineering: the exact wording mattered because models were rigid. Then it was
+context engineering: models could reason over almost anything, so the job
+became choosing what they see — retrieved documents, history, tool results.
+Now models write their own next step and pull their own context through tool
+calls, so neither the input nor the context is the scarce skill any more. The
+scarce skill is **the loop**: what the agent does between steps, when it checks
+its work, when it may stop, and what happens when a step fails.
+
+The primitive under every agent: the model is called, it chooses an action
+(usually a tool call), the harness runs it, the result comes back as an
+observation, the observation joins the context, and the model is called again.
+Reason, act, observe, repeat — ReAct.
+
+**In Sanwaad.** `loop/kernel.py` is that primitive, and `loop/policy.py` is the
+thing that chooses: `ModelPolicy` (Gemini) or `ScriptedSupportPolicy` (offline).
+Watch the running example:
+
+```
+“Where is my refund for the ₹640 double debit?”
+  1. lookup_transaction  amount_inr=640          ok
+  2. reversal_status     reference=NP-TXN-640-B  ok
+  3. propose_reversal    reference=NP-TXN-640-B  proposal_valid
+  → needs_human   a validated reversal is ready — moving money is a human decision
+```
+
+**The decision.** The policy only ever returns one structured `Decision`. Which
+actions exist, how they run, when the loop may stop and when a person takes over
+all belong to the kernel. The model is the part that improves every few months,
+and the loop is the part you own.
+
+**How this differs from Part I.** The case graph (Lesson 6) is a pipeline where
+code picks the next node. Here the model picks the next action. Both belong in
+one system: the pipeline where the steps are known, the loop where they aren't.
+
+<details><summary><b>Check yourself:</b> The offline policy reads only the rendered view, not the window object. Why does that matter?</summary>
+
+Because that is all a model would see. When compaction drops a step from the
+view, the offline policy genuinely loses it too — so memory and compaction have
+to earn their place in the measurements, rather than being flattered by a
+stand-in that can see everything.
+</details>
+
+---
+
+## Lesson 14 — Stopping conditions and loop economics
+
+**The idea.** The failure almost nobody engineers is the stopping condition.
+Left to itself, an agent keeps calling the tool, keeps re-reasoning, keeps
+spinning on a task it cannot complete — and burns tokens the whole time. The
+model's own sense of "done" can't be fully trusted, so production loops run
+several stopping conditions at once.
+
+And every pass is a full model call: latency and cost grow with loop length. An
+agent that takes ten passes to do a two-pass task costs ten times as much and
+fails in ten times as many places. The tightest loop that still finishes
+reliably is the one you want.
+
+**In Sanwaad.** `loop/budget.py` checks all of these before every pass:
+
+| Stop | Fires when |
+|---|---|
+| `done` | a final answer passed every in-loop verifier |
+| `needs_human` | the remaining judgement has no cheap verifier |
+| `max_iterations` | the pass cap is reached |
+| `budget_exhausted` | the token or cost ceiling is reached |
+| `timeout` | wall-clock time runs out |
+| `stalled` | the same tool, with the same arguments, three times in a row |
+| `verifier_exhausted` | the answer kept failing a cheap verifier |
+
+The `Meter` prices every pass, offline too (as an estimate at the loop's model
+tier), so loop length always shows up as money.
+
+Two misbehaving agents in the loop eval show why you need more than one
+condition:
+
+- `NeverFinishes` repeats one lookup. **Stall detection** stops it at pass 3.
+- `Wanderer` does something different every pass and never answers, so stall
+  detection can't see it. Only a **budget** stops it: pass 8 on the general
+  budget, pass 3 once a workflow sizes the budget to the job (Lesson 18).
+
+**Economics in practice.** Loops get shorter when the agent has the right
+context up front. The planner in Part I reads the ledger *before* asking the
+model anything, for exactly this reason. And tool inputs matter: in the first
+smoke test, the agent asked the policy sub-agent a vague question ("how long
+does a failed transfer take?"), got the wrong clause back, and had to search
+again — one wasted pass. Delegating in policy terms fixed it.
+
+<details><summary><b>Check yourself:</b> Why are budgets checked before a pass rather than after it?</summary>
+
+After it, the pass that broke the budget has already been paid for. Checking
+first means the budget stops the next call instead of noticing it.
+</details>
+
+---
+
+## Lesson 15 — Harness engineering and system-level evaluation
+
+**The idea.** A production agent is mostly traditional software. The **harness**
+is the deterministic code wrapped around the model: retries when a tool fails,
+timeouts when a database is slow, fallbacks when output is malformed,
+guardrails that stop a refund promise, structured tracing to reconstruct what
+happened. The model is a small part of whether an agent survives real traffic;
+the harness is most of it.
+
+The common trap is **point-solution thinking**: polishing one component — the
+intent classifier, the reply writer — as if the agent were that component. It
+isn't; it's a loop where every step feeds the next. A flawless classifier is
+worthless if the lookup after it times out with no handling, because the loop
+stalls right there.
+
+That changes evaluation. "Was this reply good?" is necessary and nowhere near
+enough. The question is whether the **system** reliably resolves conversations:
+when the lookup fails, does it degrade gracefully or invent an order number?
+What about a furious customer, an out-of-policy request, garbage input?
+
+**In Sanwaad.** Part I built the harness — timeouts, schema retries and
+fallbacks (Lesson 3), tool contracts and safe retries (Lesson 4), guardrails
+(Lesson 9), traces (Lesson 12). Part II doesn't rebuild it; the loop kernel
+simply runs every action through it. What Part II adds is **system-level
+evaluation of the loop**: `evals/loop_eval.py`, 13 end-to-end scenarios graded
+on outcomes.
+
+| Scenario | What a good loop does |
+|---|---|
+| ledger-outage-degrades | the lookup fails three times → opens a ticket, invents nothing |
+| angry-customer | stays factual, asks for the reference, promises nothing |
+| out-of-policy-refund | code refuses the ₹32,000 reversal → a person decides |
+| malformed-input | "₹₹₹ ??? 640640640" → asks what they need, in one pass |
+| someone-elses-reference | finds nothing, because lookups are scoped to the author |
+| runaway / wandering agent | stopped by stall detection / by a budget |
+
+Two checks run on every scenario whatever it expects: no answer shipped that a
+cheap verifier would reject, and the support loop never moved money. And
+`loop/outer.py`'s `trace_report` applies the same system-level view to **real
+recorded runs**, not only to scenarios — the job tools like LangSmith or
+Langfuse do for scoring end-to-end traces.
+
+<details><summary><b>Check yourself:</b> Where does the loop eval's "unsafe answers" metric come from at rungs that have no in-loop verifiers?</summary>
+
+It runs the same cheap verifiers after the fact, on the final answer and
+everything the loop observed. That is how the ladder can show M1 shipping an
+unsupported timeline even though M1 itself never checked.
+</details>
+
+---
+
+## Lesson 16 — Context rot
+
+**The idea.** A loop's context grows on its own. Every tool result and every
+intermediate step is appended, pass after pass, and long before the hard limit
+quality drops: the window fills with stale, low-signal tokens and the agent
+loses the thread. That is **context rot**, and it is why long-running agents
+start strong and degrade halfway through. So every pass decides what stays,
+what is compressed and what is dropped. Context is a resource you budget, like
+passes and money.
+
+Three techniques, and one architectural consequence:
+
+1. **Compaction** — fold earlier steps into short summaries.
+2. **External memory** — write facts to a store, read back only what's relevant.
+3. **Tool result management** — filter, extract and cap a tool's output before
+   it enters the context. Never dump a whole record or a thousand rows.
+4. **Sub-agents for context isolation** — hand a bounded task to an agent with a
+   clean context, and take back only the result. Much of multi-agent
+   orchestration is really context management.
+
+**In Sanwaad.** `loop/window.py`:
+
+- **Shaping.** A lookup is cut to reference, kind, amount, status and age, capped
+  at three matches, and redacted — raw and shaped sizes are both counted.
+- **Scratchpad.** Facts are written as they're observed and shown by relevance.
+  A fact survives compaction even when the step that found it doesn't, and
+  isn't shown twice while its step is still visible.
+- **Compaction.** Above the budget, the oldest steps become one-line summaries;
+  if the two most recent steps alone still overflow, fewer remembered facts are
+  shown. Recent steps are never cut.
+
+`loop/subagent.py` is the fourth technique. The policy sub-agent holds the
+question and its retrieved clauses in its own context and returns one line. In
+the walkthrough it consumed **407 tokens and returned 34**.
+
+**Measured.** The long-research scenario asks a six-part policy question: seven
+passes of search results. Peak context:
+
+| | no compaction (M1, M2) | compaction (M3+) |
+|---|---|---|
+| budget 600 | 1,069 | 599 |
+| budget 800 | 1,069 | 752 |
+| budget 1,000 | 1,069 | 985 |
+
+Without compaction the window just grows; with it, the window tracks whatever
+budget you give it.
+
+**Verification is not fooled by compaction.** Verifiers read everything ever
+observed, not the compacted view, so dropping a step can never make a true
+fact look invented.
+
+<details><summary><b>Check yourself:</b> Why does conversation memory (Lesson 18) keep decisions but never live facts?</summary>
+
+A reversal's status changes; a remembered "initiated" becomes a lie within a day.
+What was *decided* — a ticket was opened, a person was asked — stays true. Live
+facts are always one tool call away from the system of record (Lesson 5).
+</details>
+
+---
+
+## Lesson 17 — Verification asymmetry
+
+**The idea.** Some outputs are cheap and reliable to verify and some aren't, and
+that asymmetry shapes the loop. Code either passes its tests or it doesn't — a
+cheap, trustworthy verifier — which is exactly why coding agents improved so
+fast: the loop checks its own work and corrects itself before anyone looks.
+Whether a refund decision was *reasonable* has no such check.
+
+So the rule: **wherever a cheap, reliable verifier exists, put it inside the
+loop** and let the agent retry on its feedback. **Wherever verification is
+expensive or subjective, put a human there.** Verification is a design
+decision made per step, and it marks where automation ends.
+
+**In Sanwaad.** `loop/verify.py` has four cheap in-loop verifiers:
+
+| Verifier | Catches |
+|---|---|
+| `reply_guardrails` | money promises, banned phrasing, internal clause ids |
+| `facts_traced` | an amount or reference the agent never observed |
+| `timelines_cited` | a timeline with no retrieved policy clause behind it |
+| `citations_retrieved` | a clause cited that was never retrieved |
+
+A failure goes back to the agent as an observation, with bounded retries. And
+`needs_human` names the judgements with no cheap check: a validated money move,
+and regulatory or fraud language.
+
+**Watch it work.** The offline agent is deliberately eager, like a real model:
+asked when a failed ₹2,000 transfer comes back, it drafts the folk answer,
+"within 5 to 7 days". `timelines_cited` rejects it because no clause backs it.
+The agent consults the policy and answers "within 3 working days", citing RFD-01.
+
+`VERIFICATION_MAP` records every check in Sanwaad — its cost, which loop it
+lives in, and what happens when it fails — so the line between automation and
+review is written down rather than implied.
+
+<details><summary><b>Check yourself:</b> The grounding check in Part I is model-judged and sits in a retry loop. Why is that acceptable when the rule says cheap verifiers go in loops?</summary>
+
+It's bounded (two redrafts, then a person) and it never has the final say on
+anything consequential: validation and approval are code and people. A
+model-judged verifier can live in a loop only if its retries are capped and it
+isn't the last line of defence.
+</details>
+
+---
+
+## Lesson 18 — MINT: Minimal Intelligence, Necessary Tools
+
+**The idea.** Build the minimal system end to end before adding a single layer.
+Then add layers one at a time — prompt and workflow, then tool use, then
+continuous evaluation, then state and memory, then more workflows, and only at
+the end human-in-the-loop and multi-agent — each one only when the layer below
+has shown a real need. Every layer answers two questions first: *how does it
+break, and what does the system do when it does?* Half the answers will be
+ordinary software failures — a timeout, a null, an API that's down — not model
+weirdness.
+
+The failure it prevents: five agents, a vector database and long-term memory
+wired together before anyone confirmed the basic loop works, then weeks lost
+because nobody can tell which layer is failing.
+
+**In Sanwaad.** `loop/mint.py` makes the ladder executable:
+
+- `config_for(rung)` builds each rung's configuration, so the same conversations
+  run at every rung.
+- `check_layering(config)` **refuses** a configuration that skips a layer —
+  multi-agent without evaluation fails at start-up.
+- `LADDER` states, for each rung, the need that justified it, how it breaks,
+  and what the system does.
+
+`python -m sanwaad.evals.loop_eval --ladder`, offline:
+
+| | M0 minimal | M1 +tools | M2 +evaluation | M3 +memory | M4 +workflows | M5 +HITL, multi-agent |
+|---|---|---|---|---|---|---|
+| Scenarios passing | 3/13 | 6/13 | 7/13 | 9/13 | 10/13 | 13/13 |
+| Unsafe answers shipped | 0 | 1 | 0 | 0 | 0 | 0 |
+| Runs over context budget | 0 | 2 | 2 | 0 | 0 | 0 |
+| Mean passes | 1.62 | 3.46 | 3.62 | 3.54 | 3.15 | 2.85 |
+| Mean cost per run (₹, est.) | 0.0131 | 0.0491 | 0.0515 | 0.0483 | 0.0390 | 0.0376 |
+| Sub-agent tokens kept out | 0 | 0 | 0 | 0 | 0 | 757 |
+
+Read it as MINT intends:
+
+- **M1** makes the loop useful — and ships one answer with a timeline nothing
+  supports. That's the observed need for evaluation.
+- **M2** stops unsupported answers shipping (1 → 0), but long conversations
+  still overrun the window. That's the need for memory.
+- **M3** holds every run inside its context budget (2 → 0), and a returning
+  customer no longer gets a second ticket.
+- **M4** workflows cut mean passes from 3.54 to 3.15, mostly by giving a
+  wandering agent a budget sized to the job.
+- **M5** hands money and legal language to a person, and the sub-agent keeps
+  757 tokens of policy out of the main loops.
+
+Mean passes and cost *rise* from M0 to M2 — tools and verification cost
+passes — and fall again as memory, workflows and delegation remove wasted ones.
+
+**Honest caveat.** Offline, the scripted policy doesn't wander, so workflows show
+their value only on the misbehaving-agent scenario. With a live model, a
+narrower set of offered tools is a smaller space to go wrong in — run the
+ladder with a key to measure that.
+
+<details><summary><b>Check yourself:</b> Why does <code>check_layering</code> exist if <code>config_for</code> already builds valid rungs?</summary>
+
+Because nobody builds a config through `config_for` when they're in a hurry. The
+check makes the shortcut fail loudly at start-up, which is the difference
+between a principle and a habit.
+</details>
+
+---
+
+## Lesson 19 — The three nested loops
+
+**The idea.** Andrew Ng describes building software with agents as three nested
+loops running at different speeds:
+
+| Loop | Speed | Run by |
+|---|---|---|
+| agent loop | seconds to minutes | the agent: build, test, iterate against a spec |
+| developer loop | tens of minutes to hours | you: review, steer, change the spec |
+| external loop | hours to weeks | the world: customers, testers, A/B tests, production data |
+
+The same asymmetry as Lesson 17 runs through them: the further out a loop sits,
+the more its verification depends on human judgement. The agent can verify its
+work against a spec; only real customers can verify that the product is good.
+Humans don't disappear — they move to the loops where they hold the context.
+
+**In Sanwaad.**
+
+- **Agent loop:** `loop/kernel.py`, verified by the in-loop checks.
+- **Developer loop:** the evals — trajectory eval, loop eval, the MINT ladder —
+  plus `feedback.py`'s reviewer corrections. You change a prompt, a tool or a
+  budget, and these tell you what moved.
+- **External loop:** `loop/outer.py`.
+  - `trace_report` measures what really ran from the recorded run log.
+  - `regression_candidates` turns runs that stalled, needed a verifier, or hit
+    a tool error into **draft** scenarios marked `review_required`. A person
+    decides the right expectation before one joins the suite, because a failure
+    copied blindly becomes a wrong expectation.
+  - `assign_variant` splits traffic deterministically — the same customer always
+    lands in the same arm, with nothing stored — and `compare_variants` compares
+    clean-stop rates with a p-value, refusing to call a winner below 30 runs per
+    arm.
+
+After the walkthrough, `python -m sanwaad.loop.outer` reads those five runs and
+selects three for review: the ledger outage, the timeline correction and the
+stalled agent.
+
+<details><summary><b>Check yourself:</b> Why does <code>assign_variant</code> hash the experiment name together with the customer?</summary>
+
+So the same customer lands in independent arms across different experiments.
+Hashing the customer alone would put the same people in "treatment" for every
+experiment, and their quirks would contaminate every comparison.
+</details>
+
+---
+
+## Lesson 20 — The four agentic design patterns
+
+**The idea.** Andrew Ng's four original agentic design patterns — reflection,
+tool use, planning and multi-agent collaboration — aren't abstract categories.
+They're the building blocks of the loop you just engineered.
+
+| Pattern | In Sanwaad's support loop | In the case graph (Part I) |
+|---|---|---|
+| **Reflection** | the draft is checked against the verifiers, and the agent retries on feedback | `ground_check` → redraft |
+| **Tool use** | lookup, reversal status, policy search, tickets, through the registry | the planner's ledger lookup, publishing, executing |
+| **Planning** | the policy sequences classify → look up → check → answer or hand over | `plan` proposes the fix; the graph fixes the order |
+| **Multi-agent** | the policy sub-agent answers in a clean context and returns one line | triage, pattern, judge, ghostwriter, planner under one orchestrator |
+
+**What to take from Part II.**
+
+- Stop treating the agent as its best component. Look at the whole loop.
+- Design the stopping conditions, and budget passes, cost and context on purpose.
+- Take the harness and system-level evaluation as seriously as the model.
+- Put cheap verifiers inside the loop, and people where verification is expensive.
+- Build up from a minimal end-to-end system, one measured layer at a time.
+
+---
+
+## Part II checklist
+
+| Requirement | Sanwaad | Proven by |
+|---|---|---|
+| Explicit loop primitive | `loop/kernel.py` | `tests/test_loop.py` · kernel |
+| Several stopping conditions at once | `loop/budget.py` | runaway and wandering scenarios |
+| Loop cost visible on every run | `Meter` | `loop_eval` cost per run |
+| Context budget, compaction, memory, shaping | `loop/window.py` | long-research scenario, window tests |
+| Sub-agent context isolation | `loop/subagent.py` | tokens kept out |
+| Cheap verifiers in the loop, humans elsewhere | `loop/verify.py` | timeline self-correction |
+| System-level evaluation under stress | `evals/loop_eval.py` | 13 scenarios, safety checks |
+| Layers added one at a time, enforced | `loop/mint.py` | the ladder, layering tests |
+| Real runs feed the spec | `loop/outer.py` | candidates, A/B tests |
+
+## Part II exercises
+
+7. **Per-workflow cost ceilings.** Give each workflow its own `max_cost_inr` and
+   add a scenario proving a refund workflow may cost more than a policy question.
+8. **Model-written compaction.** Replace the one-line extractive summaries with a
+   model summariser, then use the long-research scenario to check whether the
+   facts the final answer needs still survive.
+9. **Run a real A/B test.** With a key, route half of your test customers to a
+   variant with sub-agents switched off. Collect at least 30 runs per arm, then
+   read `compare_variants`. Is the difference real?
+10. **Close the outer loop.** Take one `regression_candidates` entry from a live
+    run, decide its correct outcome, and add it to `loop_eval.SCENARIOS`.
+11. **A model-judged tone check.** Add a `MODEL`-cost verifier for brand voice.
+    Decide, and justify in a comment, whether it belongs inside the loop or in
+    sampled offline evaluation.

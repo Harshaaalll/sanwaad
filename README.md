@@ -8,11 +8,13 @@ checks it against the ledger, a person approves the exact amount, and the
 executor checks again before anything moves.
 
 Built with LangGraph, Gemini, local hybrid RAG (ONNX embeddings + BM25), typed
-tools with approvals, and trace-level evaluation. It runs end to end with no
-API key.
+tools with approvals, trace-level evaluation, and a loop-engineered support
+agent that runs act → observe → verify → retry under explicit budgets. It runs
+end to end with no API key.
 
 ```bash
 python -m sanwaad.demo                # the whole system, offline
+python -m sanwaad.loop                # the support agent loop, pass by pass
 python -m sanwaad.evals.trajectory    # grade every step of 15 scenarios
 ```
 
@@ -104,6 +106,52 @@ and the registry rejects a tool call outside its list.
 
 ---
 
+## Loop engineering
+
+The case pipeline above is code choosing each step. Private support
+conversations ("where's my refund?") are different: the model chooses each
+action, and Sanwaad engineers the loop it runs inside.
+
+```
+customer message
+      │
+      ▼
+  ┌─► model decides ONE action ──► harness runs it (registry: contracts, retries, audit)
+  │                                         │
+  │                                         ▼
+  └── context window ◄── observation, shaped: filtered, capped, redacted
+      budgeted: compaction,
+      external memory, sub-agents
+      │
+      final answer ──► cheap verifiers ──► pass: done
+                              │             rejected: feedback, try again (bounded)
+      money or legal language ──────────────► needs_human
+      budget · pass cap · stall · timeout ──► stop
+```
+
+- **Stopping conditions.** Seven stop reasons are checked before every pass,
+  whichever fires first. A runaway agent is stopped at pass 3 by stall
+  detection; one that never repeats itself is stopped by a budget.
+- **Loop economics.** Every pass is priced, offline as an estimate, so loop
+  length always shows up as money.
+- **Context rot, managed.** Tool results are shaped before they enter; facts go
+  to a scratchpad that outlives compaction; old steps compact under a token
+  budget; a policy sub-agent answers in its own clean context and returns one
+  line (407 tokens consumed, 34 returned).
+- **Verification asymmetry.** Cheap verifiers sit inside the loop and turn a bad
+  draft into feedback: the agent's remembered "5 to 7 days" is rejected, and it
+  answers "3 working days" from policy. Money moves and legal language have no
+  cheap check, so they stop with `needs_human`.
+- **MINT.** Minimal Intelligence, Necessary Tools: six rungs, each adding one
+  layer only after the one below showed a measured need. `check_layering`
+  refuses a configuration that skips one.
+- **The three nested loops.** Recorded runs feed a system-level trace report;
+  runs that stalled or needed correcting become draft scenarios for human
+  review; traffic splits deterministically for A/B tests that refuse to call a
+  winner on too few runs.
+
+---
+
 ## Results
 
 ### Trajectory eval: 15 scenarios, every step graded
@@ -151,6 +199,27 @@ language model.
 `strict@5` is 1.0 only when *every* clause a correct reply needs is retrieved.
 Removing the category prior drops Hinglish to 0.50.
 
+### Loop eval: what each MINT layer buys
+
+13 end-to-end scenarios, including a ledger outage, garbage input, an angry
+customer, an out-of-policy refund, a runaway agent and a six-part research
+question, each run at every rung. Offline, with the scripted policy; costs are
+estimates at the loop's model tier.
+
+| | M0 minimal | M1 +tools | M2 +evaluation | M3 +memory | M4 +workflows | M5 +HITL, multi-agent |
+|---|---|---|---|---|---|---|
+| Scenarios passing | 3/13 | 6/13 | 7/13 | 9/13 | 10/13 | 13/13 |
+| Unsafe answers shipped | 0 | 1 | 0 | 0 | 0 | 0 |
+| Runs over context budget | 0 | 2 | 2 | 0 | 0 | 0 |
+| Mean passes | 1.62 | 3.46 | 3.62 | 3.54 | 3.15 | 2.85 |
+| Mean cost per run (₹, est.) | 0.0131 | 0.0491 | 0.0515 | 0.0483 | 0.0390 | 0.0376 |
+| Sub-agent tokens kept out | 0 | 0 | 0 | 0 | 0 | 757 |
+
+M1 ships an unsupported timeline, so evaluation is added and unsafe answers
+drop to zero. M2 overruns the context window on long tasks (a peak of 1,069
+tokens against an 800-token budget), so memory and compaction are added (peak
+752). Regenerate with `python -m sanwaad.evals.loop_eval --ladder --markdown`.
+
 ---
 
 ## Run it
@@ -167,7 +236,10 @@ python -m sanwaad.evals.trajectory         # 15 scenarios, step by step
 python -m sanwaad.evals.retrieval          # retrieval strategies compared
 python -m sanwaad.memory                   # what is remembered, where, how long
 python -m sanwaad.router                   # which model runs each step
-pytest tests/ -q                           # 147 tests, no API key
+python -m sanwaad.loop                     # the support loop, pass by pass
+python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
+python -m sanwaad.loop.outer               # the external loop over recorded runs
+pytest tests/ -q                           # 184 tests, no API key
 ```
 
 The first run downloads a ~470 MB multilingual embedding model; later starts are
@@ -179,10 +251,14 @@ Murf keys.
 
 ## Learn the design
 
-[`sanwaad/DESIGN.md`](sanwaad/DESIGN.md) is a twelve-lesson course on agentic AI
-system design, taught through this codebase: model routing, tools, memory and
-state, orchestration, evaluation, approvals, reliability, cost and latency,
-context and RAG, observability, security and privacy. Each lesson points to the
+[`sanwaad/DESIGN.md`](sanwaad/DESIGN.md) is a twenty-lesson course in two parts,
+taught through this codebase. Part I covers the building blocks of an agentic
+system: model routing, tools, memory and state, orchestration, evaluation,
+approvals, reliability, cost and latency, context and RAG, observability,
+security and privacy. Part II covers loop engineering: the loop primitive,
+stopping conditions and loop economics, harness engineering and system-level
+evaluation, context rot, verification asymmetry, MINT, the three nested loops
+and the four agentic design patterns. Each lesson points to the
 code, explains the decision behind it, and ends with a command to run and a
 question to check yourself.
 
@@ -193,6 +269,8 @@ question to check yourself.
 ```
 sanwaad/
   graph/          the LangGraph state machine: state, nodes, edges
+  loop/           the support agent loop: kernel, budgets, window, verifiers,
+                  policies, sub-agent, MINT ladder, outer loops
   agents.py       agent contracts: role, writes, tools
   listener.py     multi-channel polling, dedupe, untagged mentions
   pattern.py      cross-case window, clustering, crisis detection
@@ -205,12 +283,12 @@ sanwaad/
   memory.py       the memory map and retention
   rag/            clause index, local embeddings, BM25 + RRF, agentic retrieval
   guardrails.py   PII redaction, money-promise and injection checks
-  evals/          golden set, retrieval eval, trajectory eval, harness
+  evals/          golden set, retrieval, trajectory and loop evals, harness
   voice/          voice brief and the WebRTC agent
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            147 tests
+tests/            184 tests
 ```
 
 ---
@@ -226,3 +304,7 @@ tests/            147 tests
 - **Voice leg.** It needs Sarvam and Murf keys, and the test suite doesn't cover it.
 - **Retention.** Retention is enforced for file-backed stores. The workflow-state
   checkpoint declares 90 days but doesn't prune yet.
+- **Offline loop policy.** Without a key, a scripted policy drives the support
+  loop. It reads only what a model would see, but it doesn't wander, so offline
+  the ladder shows workflows' value only on the misbehaving-agent scenario; the
+  benefit of offering fewer tools needs the live model to measure.

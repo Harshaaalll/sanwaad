@@ -110,6 +110,25 @@ MEMORY_MAP: list[MemoryTier] = [
         "String arguments redacted",
         "Who moved money, on whose approval, is not an optional question."),
     MemoryTier(
+        "Conversation memory", "episodic", "JSON file, 5 turns per customer",
+        ("sanwaad.loop.support", "CONVERSATIONS_PATH"),
+        "What earlier support turns decided: intent, outcome, the open ticket",
+        30, False,
+        "Yes — one line per earlier turn, at the start of the next turn",
+        "Decisions only, redacted; no live facts",
+        "A returning customer should not start again or get a second ticket. Live "
+        "facts go stale, so only decisions are kept; turns older than 30 days are "
+        "ignored at recall."),
+    MemoryTier(
+        "Loop run log", "audit", "JSONL",
+        ("sanwaad.loop.kernel", "LOOP_RUNS_PATH"),
+        "Every support-loop run: steps, verdicts, stop reason, spend, context stats",
+        30, True,
+        "Never — the outer loop and the trace evals read it",
+        "Messages and answers redacted",
+        "The external feedback loop learns from real runs, not only from the "
+        "scenarios someone thought to write."),
+    MemoryTier(
         "Payments and tickets", "system of record", "Application backend (mock: JSON)",
         ("sanwaad.tools.ledger", "BACKEND_PATH"),
         "Transactions, reversals, tickets",
