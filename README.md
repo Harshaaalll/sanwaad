@@ -293,6 +293,19 @@ tests/            184 tests
 
 ---
 
+## Project log
+
+| Date | Commit | What landed |
+|---|---|---|
+| 2026-09-15 | `1a3af80` | Sanwaad as a standalone repo: the four agents (listener, pattern, judge, ghostwriter), the LangGraph case graph, hybrid RAG over the policy index, typed tools with human-approved money actions, trace-level evals, and DESIGN.md Part I (12 lessons) |
+| 2026-09-16 | `8fb9400` | Loop engineering: the support agent loop (kernel, stopping conditions, context window, verifiers, policy sub-agent), the MINT ladder, the three nested loops, a 13-scenario loop eval, and DESIGN.md Part II (8 lessons) |
+
+`git log --oneline` for the full history. The repo starts from a clean commit:
+earlier exploratory work on speech-to-speech voice agents lives in a separate
+private repository.
+
+---
+
 ## Status and limits
 
 - **Mock systems of record.** The payments ledger and ticket desk are mocks, and

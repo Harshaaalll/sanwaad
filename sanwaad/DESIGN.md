@@ -1050,7 +1050,10 @@ Humans don't disappear — they move to the loops where they hold the context.
 
 **In Sanwaad.**
 
-- **Agent loop:** `loop/kernel.py`, verified by the in-loop checks.
+- **Agent loop:** `loop/kernel.py`, verified by the in-loop checks. Ng's example
+  is a coding agent building the product; Sanwaad's inner loop is the product's
+  own runtime loop. Same shape — act, verify, iterate against a spec — at a
+  different altitude, and both sit inside the same developer and external loops.
 - **Developer loop:** the evals — trajectory eval, loop eval, the MINT ladder —
   plus `feedback.py`'s reviewer corrections. You change a prompt, a tool or a
   budget, and these tell you what moved.
