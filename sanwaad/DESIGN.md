@@ -853,6 +853,32 @@ cheap verifier would reject, and the support loop never moved money. And
 recorded runs**, not only to scenarios — the job tools like LangSmith or
 Langfuse do for scoring end-to-end traces.
 
+**The harness starts at the microphone.** Point-solution thinking is easiest to
+fall into at the edges of a system, where the input looks like someone else's
+problem. The voice leg is the clearest case. An Indic ASR hands back "chaar
+hazaar paanch sau" — a perfect transcription — and every deterministic check
+downstream is arithmetic on an amount, so the ledger lookup misses, the
+severity rule that escalates above ₹2,000 never fires, and nothing anywhere
+reports an error. A better speech model does not fix it, because nothing was
+misheard.
+
+So two pieces of ordinary, testable code sit around the model on the input
+side, and they are harness, not intelligence:
+
+| Piece | What it does | Why not the model |
+|---|---|---|
+| `voice/numbers.py` | spoken numbers to digits across English, Hinglish and Devanagari, tagging which are money | an LLM can do it, at a round trip and a hallucinated digit per turn; arithmetic should be arithmetic |
+| `voice/brief.py` · `build_hotwords` | the bias vocabulary for *this* call, from the complaint and its retrieved clauses | a hand-written word list drifts from the case; a derived one cannot |
+
+Both follow the rule that makes a harness trustworthy rather than merely busy:
+**when it is not sure, it does nothing.** `bayalis hazaar` is 42,000, the
+tables do not know `bayalis`, and reading the `hazaar` alone as 1,000 would put
+a confident wrong figure into a ledger lookup — so it is left exactly as
+spoken. A wrong amount is worse than an unconverted one, because a wrong amount
+looks like a fact. The same instinct decides what leaves the building: a
+reference number would be an excellent hotword, and it is never sent, because a
+bias list goes to a third party.
+
 <details><summary><b>Check yourself:</b> Where does the loop eval's "unsafe answers" metric come from at rungs that have no in-loop verifiers?</summary>
 
 It runs the same cheap verifiers after the fact, on the final answer and

@@ -284,11 +284,11 @@ sanwaad/
   rag/            clause index, local embeddings, BM25 + RRF, agentic retrieval
   guardrails.py   PII redaction, money-promise and injection checks
   evals/          golden set, retrieval, trajectory and loop evals, harness
-  voice/          voice brief and the WebRTC agent
+  voice/          the call brief, hotwords, spoken numbers, the WebRTC agent
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            184 tests
+tests/            215 tests
 ```
 
 ---
@@ -314,7 +314,9 @@ private repository.
   `SANWAAD_ALLOW_POSTING=true`.
 - **Offline numbers.** The trajectory table above grades the system with stubbed
   model calls. Live-model results will differ; that's the point of running it.
-- **Voice leg.** It needs Sarvam and Murf keys, and the test suite doesn't cover it.
+- **Voice leg.** The call itself needs Sarvam and Murf keys and is not covered by
+  tests. What runs around it is: the spoken-number normaliser and the per-call
+  hotword list are pure functions and are tested offline.
 - **Retention.** Retention is enforced for file-backed stores. The workflow-state
   checkpoint declares 90 days but doesn't prune yet.
 - **Offline loop policy.** Without a key, a scripted policy drives the support

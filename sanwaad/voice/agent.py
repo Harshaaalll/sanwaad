@@ -18,7 +18,8 @@ from loguru import logger
 
 from ..config import inr_per_usd, llm_cost
 from ..models import Citation, VoiceOutcome
-from .brief import CitationTracker, build_voice_prompt
+from .brief import CitationTracker, build_hotwords, build_voice_prompt
+from .numbers import normalise
 
 # Sarvam STT is priced in INR per second of audio; Murf TTS in USD per character.
 STT_SARVAM_PER_SEC_INR = 30.0 / 3600.0
@@ -98,6 +99,7 @@ async def run_voice_call(
         Frame,
         LLMRunFrame,
         MetricsFrame,
+        TranscriptionFrame,
         TTSSpeakFrame,
         TTSTextFrame,
     )
@@ -117,9 +119,17 @@ async def run_voice_call(
     metrics = VoiceMetrics()
     tracker = CitationTracker(citations)
 
+    # The vocabulary of this call, from this call's own case. It goes into the
+    # prompt so the model reads a near-miss as the word that was meant, and it
+    # is what an STT that accepts a bias list would be given.
+    hotwords = build_hotwords(complaint=complaint, category=category,
+                              citations=citations)
+    logger.info(f"[voice:{case_id}] hotwords: {hotwords}")
+
     system_prompt = build_voice_prompt(
         complaint=complaint, public_reply=public_reply, summary=summary,
         category=category, language=language, citations=citations,
+        hotwords=hotwords,
     )
 
     transport = SmallWebRTCTransport(
@@ -153,6 +163,30 @@ async def run_voice_call(
         ),
     )
 
+    heard_amounts: list[float] = []
+
+    class SpokenNumbers(FrameProcessor):
+        """Words to digits, before the transcript reaches the model.
+
+        It sits directly after the STT because everything downstream — the
+        model's reasoning, any ledger lookup, the consistency receipt — is
+        arithmetic on an amount, and "chaar hazaar paanch sau" is not a number
+        to any of them. What the customer actually said is logged unchanged
+        beside the rewrite, so a wrong conversion is visible rather than
+        silently believed.
+        """
+
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, TranscriptionFrame) and frame.text:
+                found = normalise(frame.text)
+                if found.changed:
+                    logger.info(f"[voice:{case_id}] heard {frame.text!r} "
+                                f"→ {found.text!r}")
+                    heard_amounts.extend(found.amounts_inr)
+                    frame.text = found.text
+            await self.push_frame(frame, direction)
+
     class Observer(FrameProcessor):
         """Feeds the citation tracker and the cost meter off the live stream.
 
@@ -183,6 +217,7 @@ async def run_voice_call(
     pipeline = Pipeline([
         transport.input(),
         stt,
+        SpokenNumbers(),
         aggregators.user(),
         llm,
         tts,
@@ -219,7 +254,8 @@ async def run_voice_call(
 
     duration = time.time() - metrics.started_at
     used = tracker.used()
-    logger.info(f"[voice:{case_id}] {duration:.0f}s, clauses used: {used}")
+    logger.info(f"[voice:{case_id}] {duration:.0f}s, clauses used: {used}, "
+                f"amounts heard: {heard_amounts}")
 
     return VoiceOutcome(
         happened=True,
