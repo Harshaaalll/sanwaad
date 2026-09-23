@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -240,18 +241,30 @@ class PolicyStore:
 
 
 _store: Optional[PolicyStore] = None
+_store_lock = threading.Lock()
 
 
 def get_store(rebuild: bool = False) -> PolicyStore:
+    """The one policy index, built once.
+
+    Double-checked locking because the server warms this on a worker thread at
+    boot while requests may already be arriving: without the lock two callers
+    can both miss the cache, build the index twice and race each other writing
+    `policy_index.json`. The fast path stays a bare attribute read.
+    """
     global _store
     if _store is not None and not rebuild:
         return _store
-    if INDEX_PATH.exists() and not rebuild:
-        _store = PolicyStore.load()
-    else:
-        _store = PolicyStore.build()
-        _store.save()
-    return _store
+    with _store_lock:
+        if _store is not None and not rebuild:
+            return _store
+        if INDEX_PATH.exists() and not rebuild:
+            _store = PolicyStore.load()
+        else:
+            built = PolicyStore.build()
+            built.save()
+            _store = built
+        return _store
 
 
 # Which clause families a triage category should pull toward. Deterministic,

@@ -1,0 +1,21 @@
+# Keep the build context small and the image free of anything local.
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+*.egg-info
+
+# Never build a key into an image.
+.env
+
+# Runtime state from local runs. The index is rebuilt inside the image; the
+# checkpoint database and logs belong to whoever ran it, not to the image.
+sanwaad/data/*
+!sanwaad/data/.gitkeep
+
+.idea
+.vscode
+.DS_Store

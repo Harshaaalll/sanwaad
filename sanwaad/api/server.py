@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -33,14 +34,41 @@ from sanwaad.pipeline import (                        # noqa: E402
 )
 from sanwaad.rag.store import get_store               # noqa: E402
 
+_BOOTED_AT = time.time()
+
+# What readiness actually depends on. The policy index is the only hard one:
+# without it there is no retrieval, and an ungrounded reply is precisely what
+# this system exists to prevent.
+_READY: dict[str, Any] = {"index": "cold", "clauses": 0, "error": None}
+
+
+async def _warm_index() -> None:
+    """Build or load the policy index, off the event loop.
+
+    First run downloads the ONNX embedding model (~470MB) and takes about a
+    minute; later starts are quick because the index is cached to disk. This
+    warms in the background rather than blocking startup, so during that minute
+    the process answers /health while /ready says it is still warming — an
+    orchestrator can then tell "coming up" from "broken", which is the whole
+    reason to have two probes. `get_store` holds a lock, so a request arriving
+    mid-warm waits for this same build instead of starting a second one.
+    """
+    try:
+        store = await asyncio.to_thread(get_store)
+        _READY.update(index="ready", clauses=len(store.clauses), error=None)
+        logger.info(f"Policy index ready: {len(store.clauses)} clauses")
+    except Exception as exc:
+        _READY.update(index="failed", error=f"{type(exc).__name__}: {exc}")
+        logger.exception("policy index failed to build")
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    # Build or load the policy index once, at boot. First run downloads the
-    # ONNX embedding model (~470MB) and takes a minute; every later start is
-    # instant because the index is cached to disk.
-    store = get_store()
-    logger.info(f"Policy index ready: {len(store.clauses)} clauses")
-    yield
+    warm = asyncio.create_task(_warm_index())
+    try:
+        yield
+    finally:
+        warm.cancel()
 
 
 app = FastAPI(title="Sanwaad", version="0.1.0", lifespan=_lifespan)
@@ -51,6 +79,43 @@ app.add_middleware(
 
 # Live WebRTC calls, keyed by case. A case can only be on one call at a time.
 _calls: dict[str, Any] = {}
+
+
+# ---------------------------------------------------------------------------
+# Probes
+#
+# Two endpoints, because they answer different questions and a deployment
+# needs both. /health asks "is this process alive", and must stay cheap and
+# dependency-free — a liveness probe that touches a database restarts the
+# container every time the database hiccups. /ready asks "should traffic come
+# here yet", and is allowed to say no.
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "version": app.version,
+            "uptime_s": round(time.time() - _BOOTED_AT, 1)}
+
+
+@app.get("/ready")
+async def ready():
+    """503 until the policy index is loaded, and after it has failed.
+
+    Returning 200 while retrieval is unavailable would let a load balancer send
+    real complaints to a process that can only answer ungrounded.
+    """
+    state = {
+        "ready": _READY["index"] == "ready",
+        "index": _READY["index"],
+        "clauses": _READY["clauses"],
+        "uptime_s": round(time.time() - _BOOTED_AT, 1),
+        # Not a dependency: without a key the models degrade to offline stubs
+        # by design, so it is reported, never a reason to fail the probe.
+        "models": "live" if os.getenv("GOOGLE_API_KEY") else "offline",
+    }
+    if _READY["error"]:
+        state["error"] = _READY["error"]
+    return JSONResponse(state, status_code=200 if state["ready"] else 503)
 
 
 # ---------------------------------------------------------------------------

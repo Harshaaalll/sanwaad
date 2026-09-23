@@ -239,11 +239,25 @@ python -m sanwaad.router                   # which model runs each step
 python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
-pytest tests/ -q                           # 184 tests, no API key
+pytest tests/ -q                           # 221 tests, no API key
 ```
 
-The first run downloads a ~470 MB multilingual embedding model; later starts are
-instant. Add `GOOGLE_API_KEY` to `.env` for real Gemini calls. The live browser
+Or in Docker, where that download already happened at build time:
+
+```bash
+docker build -t sanwaad .
+docker run --rm -p 7870:7870 sanwaad                 # offline stubs, no key
+docker run --rm -p 7870:7870 --env-file .env sanwaad # live models
+```
+
+The image bakes in the embedding model and builds the policy index at build
+time, so the container reports `/ready` about a second after start rather than a
+minute. `/health` is liveness and depends on nothing; `/ready` returns 503 until
+the index is loaded, because serving a complaint without retrieval means
+answering it ungrounded.
+
+Run it directly and the first run downloads a ~470 MB multilingual embedding
+model; later starts are instant. Add `GOOGLE_API_KEY` to `.env` for real Gemini calls. The live browser
 voice leg is optional: `pip install -r requirements-voice.txt`, plus Sarvam and
 Murf keys.
 
@@ -288,7 +302,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            215 tests
+tests/            221 tests
 ```
 
 ---
@@ -300,6 +314,7 @@ tests/            215 tests
 | 2026-09-15 | `1a3af80` | Sanwaad as a standalone repo: the four agents (listener, pattern, judge, ghostwriter), the LangGraph case graph, hybrid RAG over the policy index, typed tools with human-approved money actions, trace-level evals, and DESIGN.md Part I (12 lessons) |
 | 2026-09-16 | `8fb9400` | Loop engineering: the support agent loop (kernel, stopping conditions, context window, verifiers, policy sub-agent), the MINT ladder, the three nested loops, a 13-scenario loop eval, and DESIGN.md Part II (8 lessons) |
 | 2026-09-21 | `4123af7` | Input-side harness for the voice leg: a spoken-number normaliser (English, Hinglish, Devanagari; Indian scales; declines what it cannot read confidently) and per-call ASR hotwords derived from the complaint and its clauses, with nothing identifying sent |
+| 2026-09-23 | `TBD` | Deployable: a Dockerfile that bakes the embedding model and the policy index at build time, and split liveness/readiness probes — `/ready` returns 503 while the index is warming or failed, so an orchestrator can tell "coming up" from "broken" |
 
 `git log --oneline` for the full history. The repo starts from a clean commit:
 earlier exploratory work on speech-to-speech voice agents lives in a separate
