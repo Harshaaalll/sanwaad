@@ -511,6 +511,33 @@ def report(results: list[ScenarioResult]) -> None:
         print(f"  {key:<30}{value}")
     print("\n  tool_call_success_rate includes faults the eval injects on purpose;"
           "\n  invalid_schema_rate is None offline, where no model is called.")
+    _latency_report()
+
+
+def _latency_report() -> None:
+    """Per-step timing from the spans this run just wrote.
+
+    The case-level p50/p95 above says the system was slow; this says which step
+    was, and whether it was slower than the router said it may be. Offline no
+    budget is ever touched, which is itself the finding: these numbers only
+    mean something with a real key behind them.
+    """
+    from ..obs import TRACER, budget_breaches, stage_stats
+
+    traces = [s.to_dict() for s in TRACER.spans if s.name.startswith("llm.")]
+    if not traces:
+        print("\n  no model spans: offline stubs never call a model.")
+        return
+
+    print(f"\n{'model step':<22}{'n':<5}{'p50 ms':<9}{'p95 ms':<9}{'budget':<9}over")
+    for r in stage_stats(traces):
+        budget = str(r["budget_ms"]) if r["budget_ms"] else "—"
+        print(f"{r['stage']:<22}{r['n']:<5}{r['p50_ms']:<9}{r['p95_ms']:<9}"
+              f"{budget:<9}{r['over_budget'] or ''}")
+    breaches = budget_breaches(traces)
+    if breaches:
+        print(f"\n  {len(breaches)} step(s) over the budget router.py sets for them; "
+              f"slowest {breaches[0]['stage']} at {breaches[0]['ms']:.0f}ms")
 
 
 def _load_env() -> None:

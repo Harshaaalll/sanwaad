@@ -23,6 +23,7 @@ python -m sanwaad.demo                 # the whole system, no API key needed
 python -m sanwaad.evals.trajectory     # grade every step of 15 scenarios
 python -m sanwaad.memory               # what is remembered, where, for how long
 python -m sanwaad.router               # which model runs each step, and its fallback
+python -m sanwaad.obs                  # p50/p95, latency budgets and spend per step
 python -m sanwaad.loop                 # Part II: watch the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder   # Part II: what each MINT layer buys
 pytest tests/ -q
@@ -43,7 +44,7 @@ pytest tests/ -q
 | 7 | Evaluation | `evals/trajectory.py` | `tests/test_trajectory.py` |
 | 8 | Approvals and policy | `actions.py`, `graph/nodes.py` (`plan`, `act`) | `tests/test_design.py` · approvals |
 | 9 | Reliability | `llm.py`, `tools/registry.py` | model-layer and tool tests |
-| 10 | Cost and latency | `router.py`, `caching.py`, `closure` | `closure.total_cost_inr` |
+| 10 | Cost and latency | `router.py`, `caching.py`, `closure` | `closure.total_cost_inr`, `python -m sanwaad.obs` |
 | 11 | Context and RAG | `context.py`, `rag/` | `evals/retrieval.py` |
 | 12 | Observability, security, privacy | `obs.py`, `guardrails.py`, `tools/registry.py` | audit log, traces |
 
@@ -545,6 +546,34 @@ successful task.
 - **Cost per case** is rolled up in `closure.total_cost_inr`, and the eval
   reports `cost_per_successful_task_inr`. `closure.llm_calls` counts attempts,
   so a retry and a fallback show up as three calls.
+- **A latency budget per step, which something actually reads.** Each route
+  carries `max_latency_ms` alongside `timeout_s`, and the two do different
+  jobs: the timeout is when to give up, the budget is what good looks like. A
+  step that answers correctly in four seconds under a two-second budget is a
+  degradation worth seeing and a terrible thing to abort, so the model layer
+  records the breach and returns the answer. `obs.stage_stats` then compares
+  the p95 of each step against the budget the router set for it.
+
+**Try it.** `python -m sanwaad.obs` — p50, p95, budget, breaches and spend per
+step, read back out of the trace log:
+
+```
+stage                   n     p50 ms    p95 ms    budget    over   cost ₹
+llm.draft               2     4750.0    7400      5000      1      0.3900
+llm.triage              1     1900      1900      1500      1      0.0100
+```
+
+The budget is a *declared* target until a real key makes it a measured one.
+Offline no model is called, so the table says so rather than showing a column
+of dashes — a number that was never measured should not look like one that was.
+
+<details><summary><b>Check yourself:</b> Why must a step's latency budget be lower than its timeout?</summary>
+
+Otherwise it can never be breached: the call is killed at the timeout first, so
+the breach counter reads a flat zero forever and the metric quietly means
+nothing. `test_a_budget_is_tighter_than_the_timeout_it_lives_under` pins it for
+every step.
+</details>
 
 <details><summary><b>Check yourself:</b> Why is the semantic cache allowed for triage but not for drafting?</summary>
 
@@ -659,7 +688,7 @@ span or audit record is written, not afterwards.
 | Explicit orchestration | `graph/graph.py` | contract and routing tests |
 | Trace-level evals | `evals/trajectory.py` | `test_trajectory.py` |
 | Approval gates | `actions.py`, `plan`, `act` | approval tests, stale-approval scenario |
-| Cost and latency controls | caps, caching, scope gate | `closure`, eval cost metric |
+| Cost and latency controls | caps, caching, scope gate, per-step latency budgets | `closure`, eval cost metric, `python -m sanwaad.obs` |
 | Context design | `context.py`, `rag/` | retrieval eval |
 | Observability | traces, audit log | span and audit tests |
 | Security and privacy | guardrails, redaction, retention | redaction and prune tests |

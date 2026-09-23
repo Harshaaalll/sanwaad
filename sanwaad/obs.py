@@ -140,7 +140,10 @@ def current_trace_id() -> Optional[str]:
     return s.trace_id if s else None
 
 
-def load_traces(path: Path = TRACE_PATH) -> list[dict]:
+def load_traces(path: Optional[Path] = None) -> list[dict]:
+    # Resolved at call time, not bound as a default: a default argument freezes
+    # TRACE_PATH at import and silently ignores anyone who redirects it.
+    path = path or TRACE_PATH
     if not path.exists():
         return []
     out = []
@@ -153,18 +156,31 @@ def load_traces(path: Path = TRACE_PATH) -> list[dict]:
 
 
 def stage_stats(traces: list[dict]) -> list[dict]:
-    """Aggregate spans into a p50/p95 table. p95 rather than mean because the
-    tail is what a caller waiting on the line actually experiences."""
+    """Aggregate spans into a p50/p95 table, each stage against its budget.
+
+    p95 rather than mean because the tail is what a caller waiting on the line
+    actually experiences. The budget column is what turns a number into a
+    verdict: `router.py` declares what each step is allowed to take, the model
+    layer stamps that budget onto the span, and the comparison happens here. A
+    budget nothing ever checks is a comment.
+    """
     import statistics
 
     by: dict[str, list[float]] = {}
     cost: dict[str, float] = {}
     errs: dict[str, int] = {}
+    breaches: dict[str, int] = {}
+    budgets: dict[str, int] = {}
     for t in traces:
-        by.setdefault(t["name"], []).append(t.get("ms", 0.0))
-        cost[t["name"]] = cost.get(t["name"], 0.0) + float(t.get("cost_inr", 0) or 0)
+        name = t["name"]
+        by.setdefault(name, []).append(t.get("ms", 0.0))
+        cost[name] = cost.get(name, 0.0) + float(t.get("cost_inr", 0) or 0)
         if t.get("error"):
-            errs[t["name"]] = errs.get(t["name"], 0) + 1
+            errs[name] = errs.get(name, 0) + 1
+        if t.get("over_budget"):
+            breaches[name] = breaches.get(name, 0) + 1
+        if t.get("latency_budget_ms"):
+            budgets[name] = int(t["latency_budget_ms"])
 
     rows = []
     for name, ms in by.items():
@@ -174,7 +190,66 @@ def stage_stats(traces: list[dict]) -> list[dict]:
             "stage": name, "n": len(ms),
             "p50_ms": round(statistics.median(ms), 1),
             "p95_ms": round(p95, 1),
+            "budget_ms": budgets.get(name),
+            "over_budget": breaches.get(name, 0),
             "cost_inr": round(cost.get(name, 0.0), 4),
             "errors": errs.get(name, 0),
         })
     return sorted(rows, key=lambda r: -r["p95_ms"])
+
+
+def budget_breaches(traces: list[dict]) -> list[dict]:
+    """Every span that took longer than its step was budgeted.
+
+    Kept separate from the table because an aggregate hides the single case
+    that took nine seconds, and that one is usually the one worth reading.
+    """
+    return sorted(
+        ({"stage": t["name"], "trace_id": t.get("trace_id"), "at": t.get("at"),
+          "ms": t.get("ms"), "budget_ms": t.get("latency_budget_ms"),
+          "model": t.get("model"), "attempts": t.get("attempts")}
+         for t in traces if t.get("over_budget")),
+        key=lambda r: -(r["ms"] or 0),
+    )
+
+
+def main(argv: list[str]) -> int:
+    """`python -m sanwaad.obs` — what each step took, cost, and was allowed."""
+    traces = load_traces()
+    if not traces:
+        print(f"\nNo traces yet at {TRACE_PATH}. Run `python -m sanwaad.demo` first.\n")
+        return 0
+
+    print(f"\n{'stage':<24}{'n':<6}{'p50 ms':<10}{'p95 ms':<10}{'budget':<10}"
+          f"{'over':<7}{'errors':<8}cost ₹")
+    print("-" * 92)
+    for r in stage_stats(traces):
+        budget = str(r["budget_ms"]) if r["budget_ms"] else "—"
+        over = str(r["over_budget"]) if r["over_budget"] else ""
+        errors = str(r["errors"]) if r["errors"] else ""
+        print(f"{r['stage']:<24}{r['n']:<6}{r['p50_ms']:<10}{r['p95_ms']:<10}{budget:<10}"
+              f"{over:<7}{errors:<8}{r['cost_inr']:.4f}")
+
+    breaches = budget_breaches(traces)
+    if breaches:
+        print(f"\n{len(breaches)} step(s) over budget, slowest first:")
+        for b in breaches[:10]:
+            print(f"  {b['stage']:<22}{b['ms']:>8.0f}ms  against {b['budget_ms']}ms"
+                  f"  {b['model'] or ''}  case {b['trace_id']}")
+    elif any(t.get("latency_budget_ms") for t in traces):
+        print("\nNo step went over its latency budget.")
+    else:
+        # Rather than print a column of dashes and let someone conclude the
+        # budgets are not wired up: they are, and nothing here was measured
+        # against one because nothing here called a model.
+        print("\nNo budgets in this log. Latency budgets are declared per model"
+              "\nstep in router.py, and offline runs never call a model —"
+              "\nadd GOOGLE_API_KEY to .env and run the demo again.")
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main(sys.argv[1:]))

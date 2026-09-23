@@ -96,6 +96,7 @@ async def triage_node(state: GrievanceState) -> dict:
                 offline_fallback=fallback,
                 max_output_tokens=r.max_output_tokens,
                 timeout_s=r.timeout_s,
+                max_latency_ms=r.max_latency_ms,
                 trace_id=state["case_id"],
             )
             TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"), namespace="triage")
@@ -323,6 +324,7 @@ async def judge_node(state: GrievanceState) -> dict:
             stage="judge",
             max_output_tokens=r.max_output_tokens,
             timeout_s=r.timeout_s,
+            max_latency_ms=r.max_latency_ms,
             trace_id=state["case_id"],
             offline_fallback={"author_class": verdict.author_class,
                               "authenticity": verdict.authenticity,
@@ -546,6 +548,7 @@ Governing clauses (trusted policy):
         stage=f"draft{'_revision' if revision else ''}",
         max_output_tokens=r.max_output_tokens,
         timeout_s=r.timeout_s,
+        max_latency_ms=r.max_latency_ms,
         trace_id=state["case_id"],
         offline_fallback={
             "text": (
@@ -621,6 +624,7 @@ async def ground_check_node(state: GrievanceState) -> dict:
         stage="ground_check",
         max_output_tokens=r.max_output_tokens,
         timeout_s=r.timeout_s,
+        max_latency_ms=r.max_latency_ms,
         trace_id=state["case_id"],
         offline_fallback={"grounded": True, "unsupported_claims": [],
                           "reasoning": "offline mode: not verified"},
@@ -757,6 +761,7 @@ async def plan_node(state: GrievanceState) -> dict:
         offline_fallback=_offline_plan(list(matches.values()), tool_errors, amounts),
         max_output_tokens=r.max_output_tokens,
         timeout_s=r.timeout_s,
+        max_latency_ms=r.max_latency_ms,
         trace_id=case_id,
     )
 

@@ -28,8 +28,10 @@ import hashlib
 import json
 import os
 import re
+import time
 from typing import Optional, Type, TypeVar
 
+from loguru import logger
 from pydantic import BaseModel
 
 from .config import inr_per_usd, llm_cost
@@ -148,6 +150,7 @@ async def structured(
     fallback_model: Optional[str] = None,
     max_output_tokens: Optional[int] = None,
     timeout_s: float = 30.0,
+    max_latency_ms: Optional[int] = None,
     schema_retries: int = 1,
     trace_id: Optional[str] = None,
 ) -> tuple[T, dict]:
@@ -166,7 +169,9 @@ async def structured(
     attempts = schema_failures = prompt_tokens = output_tokens = 0
     usd = 0.0
 
-    with TRACER.span(f"llm.{stage}", trace_id=trace_id, prompt_version=version) as span:
+    started = time.perf_counter()
+    with TRACER.span(f"llm.{stage}", trace_id=trace_id, prompt_version=version,
+                     latency_budget_ms=max_latency_ms) as span:
         for index, current in enumerate(models):
             correction = ""
             for _ in range(1 + schema_retries):
@@ -209,16 +214,37 @@ async def structured(
                 span.set(model=current, attempts=attempts, schema_failures=schema_failures,
                          fallback_used=index > 0, prompt_tokens=prompt_tokens,
                          output_tokens=output_tokens, cost_inr=entry["inr"])
+                _check_latency(stage, started, max_latency_ms, span)
                 return result, entry
 
         span.set(degraded=True, attempts=attempts, schema_failures=schema_failures,
                  llm_errors=errors[-3:])
+        _check_latency(stage, started, max_latency_ms, span)
         if offline_fallback is None:
             raise ModelCallError(stage, errors)
         return schema.model_validate(offline_fallback), _entry(
             stage, "degraded", version=version, usd=usd, prompt_tokens=prompt_tokens,
             output_tokens=output_tokens, attempts=attempts, schema_failures=schema_failures,
             fallback_used=len(models) > 1, degraded=True, errors=errors)
+
+
+
+def _check_latency(stage: str, started: float, budget_ms: Optional[int], span) -> float:
+    """Compare what this step actually took against what it was budgeted.
+
+    The budget is not a deadline. `timeout_s` already handles giving up; this
+    measures whether a step that succeeded did so acceptably fast, which is a
+    different question and one nothing was asking. Recording it on the span is
+    what lets `obs.stage_stats` count breaches per stage after the fact, and
+    the warning is for the operator watching one slow case in real time.
+    """
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    span.set(latency_ms=round(elapsed_ms, 1))
+    if budget_ms and elapsed_ms > budget_ms:
+        span.set(over_budget=True)
+        logger.warning(f"latency budget: {stage} took {elapsed_ms:.0f}ms "
+                       f"against a {budget_ms}ms budget")
+    return elapsed_ms
 
 
 def format_citations(citations: list) -> str:

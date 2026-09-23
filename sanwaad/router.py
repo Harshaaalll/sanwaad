@@ -27,7 +27,15 @@ Stage = Literal["triage", "judge", "draft", "ground_check", "plan", "voice"]
 class Route:
     model: str
     reason: str
-    max_latency_ms: Optional[int] = None   # None = latency does not matter here
+    # The budget is what "good" looks like; `timeout_s` is when we give up.
+    # They are different numbers doing different jobs: a step that answers in
+    # four seconds under a two-second budget is a degradation worth seeing, and
+    # aborting it would be worse than the slowness. So a breach is recorded and
+    # reported, never raised. None means latency does not matter for this step.
+    #
+    # These are targets set relative to each step's timeout, not measurements —
+    # a real key and `python -m sanwaad.obs` turn them into measured ones.
+    max_latency_ms: Optional[int] = None
     # Where to go when `model` times out, errors, or keeps failing its schema.
     # Usually one tier up (a harder prompt is a reason to try a stronger
     # model); for the reasoning tier, one tier down (the likelier failure
@@ -60,15 +68,18 @@ def route(stage: Stage, *, severity: int = 1, revision: int = 0,
         # spend. Nothing about triage justifies a larger model — it is a
         # short classification with a fixed label set.
         return Route(TIER_TRIAGE, "classification over a fixed label set",
-                     fallback=TIER_DRAFT, max_output_tokens=300, timeout_s=8.0)
+                     fallback=TIER_DRAFT, max_output_tokens=300, timeout_s=8.0,
+                     max_latency_ms=1500)
 
     if stage == "judge":
         return Route(TIER_TRIAGE, "ambiguous-band author read: a short classification",
-                     fallback=TIER_DRAFT, max_output_tokens=200, timeout_s=8.0)
+                     fallback=TIER_DRAFT, max_output_tokens=200, timeout_s=8.0,
+                     max_latency_ms=1500)
 
     if stage == "ground_check":
         return Route(TIER_DRAFT, "verification needs the drafting tier's reading ability",
-                     fallback=TIER_REASONING, max_output_tokens=400, timeout_s=15.0)
+                     fallback=TIER_REASONING, max_output_tokens=400, timeout_s=15.0,
+                     max_latency_ms=4000)
 
     if stage == "plan":
         # Deliberately NOT the reasoning tier, even though this step proposes
@@ -77,10 +88,14 @@ def route(stage: Stage, *, severity: int = 1, revision: int = 0,
         # Spending more on the model would buy accuracy the validator already
         # guarantees.
         return Route(TIER_DRAFT, "proposals are validated by code before anyone approves them",
-                     fallback=TIER_REASONING, max_output_tokens=400, timeout_s=15.0)
+                     fallback=TIER_REASONING, max_output_tokens=400, timeout_s=15.0,
+                     max_latency_ms=4000)
 
     # draft
-    strong = dict(fallback=TIER_DRAFT, max_output_tokens=400, timeout_s=25.0)
+    # The reasoning tier is slower by construction, so its budget is looser.
+    # A budget the step can never meet teaches an operator to ignore breaches.
+    strong = dict(fallback=TIER_DRAFT, max_output_tokens=400, timeout_s=25.0,
+                  max_latency_ms=8000)
     if revision > 0:
         return Route(TIER_REASONING,
                      f"revision {revision}: the cheap tier already failed grounding once", **strong)
@@ -90,7 +105,8 @@ def route(stage: Stage, *, severity: int = 1, revision: int = 0,
     if severity >= 4:
         return Route(TIER_REASONING, f"severity {severity}: high-stakes reply", **strong)
     return Route(TIER_DRAFT, f"severity {severity}: routine reply",
-                 fallback=TIER_REASONING, max_output_tokens=400, timeout_s=20.0)
+                 fallback=TIER_REASONING, max_output_tokens=400, timeout_s=20.0,
+                 max_latency_ms=5000)
 
 
 def explain() -> list[dict]:
