@@ -25,6 +25,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from sanwaad.connectors import get_connector          # noqa: E402
+from sanwaad.delivery import DELIVERY                 # noqa: E402
 from sanwaad.models import Citation, Complaint        # noqa: E402
 from sanwaad.pipeline import (                        # noqa: E402
     get_case,
@@ -144,8 +145,12 @@ async def ingest(req: IngestRequest):
                 "triage": out["state"].get("triage"),
             })
         except Exception as exc:  # one bad item must not stall the batch
+            # Recorded in the same place the listener records its failures, so
+            # there is one queue to read rather than one per entry point.
+            failure = DELIVERY.record_failure(complaint, exc)
             logger.exception(f"case failed for {complaint.external_id}")
-            results.append({"external_id": complaint.external_id, "error": str(exc)})
+            results.append({"external_id": complaint.external_id, "error": str(exc),
+                            "attempts": failure.attempts, "status": failure.status})
 
     return {"ingested": len(results), "cases": results}
 

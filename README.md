@@ -235,11 +235,12 @@ python -m sanwaad.api.server               # review console at http://localhost:
 python -m sanwaad.evals.trajectory         # 15 scenarios, step by step
 python -m sanwaad.evals.retrieval          # retrieval strategies compared
 python -m sanwaad.memory                   # what is remembered, where, how long
+python -m sanwaad.delivery                 # what gave up, and why
 python -m sanwaad.router                   # which model runs each step
 python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
-pytest tests/ -q                           # 221 tests, no API key
+pytest tests/ -q                           # 232 tests, no API key
 ```
 
 Or in Docker, where that download already happened at build time:
@@ -297,12 +298,13 @@ sanwaad/
   memory.py       the memory map and retention
   rag/            clause index, local embeddings, BM25 + RRF, agentic retrieval
   guardrails.py   PII redaction, money-promise and injection checks
+  delivery.py     the dead-letter queue: what gave up, and why
   evals/          golden set, retrieval, trajectory and loop evals, harness
   voice/          the call brief, hotwords, spoken numbers, the WebRTC agent
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            221 tests
+tests/            232 tests
 ```
 
 ---
@@ -315,6 +317,7 @@ tests/            221 tests
 | 2026-09-16 | `8fb9400` | Loop engineering: the support agent loop (kernel, stopping conditions, context window, verifiers, policy sub-agent), the MINT ladder, the three nested loops, a 13-scenario loop eval, and DESIGN.md Part II (8 lessons) |
 | 2026-09-21 | `4123af7` | Input-side harness for the voice leg: a spoken-number normaliser (English, Hinglish, Devanagari; Indian scales; declines what it cannot read confidently) and per-call ASR hotwords derived from the complaint and its clauses, with nothing identifying sent |
 | 2026-09-23 | `f8b5a99` | Deployable: a Dockerfile that bakes the embedding model and the policy index at build time, and split liveness/readiness probes — `/ready` returns 503 while the index is warming or failed, so an orchestrator can tell "coming up" from "broken" |
+| 2026-09-23 | `TBD2` | A floor under retrying: items that fail three times are dead-lettered with their errors and the customer's words instead of being refetched forever, with `--requeue` to put one back after a fix |
 
 `git log --oneline` for the full history. The repo starts from a clean commit:
 earlier exploratory work on speech-to-speech voice agents lives in a separate

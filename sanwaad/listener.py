@@ -30,6 +30,7 @@ from loguru import logger
 
 from .config import DATA_DIR
 from .connectors import get_connector
+from .delivery import DELIVERY, DeliveryLog
 from .models import Complaint
 
 SEEN_PATH = DATA_DIR / "listener_seen.json"
@@ -74,8 +75,11 @@ def mentions_brand(text: str) -> bool:
 class SeenStore:
     """Ids already handed downstream. Small, boring, and load-bearing."""
 
-    def __init__(self, path=SEEN_PATH, max_ids: int = 5000):
-        self.path = path
+    def __init__(self, path=None, max_ids: int = 5000):
+        # Resolved here rather than as a default argument, so that patching
+        # SEEN_PATH — which the eval harness and the tests do — is actually
+        # seen by a store built afterwards.
+        self.path = path or SEEN_PATH
         self.max_ids = max_ids
 
     def load(self) -> list[str]:
@@ -142,12 +146,14 @@ class Listener:
 
     def __init__(self, channels: Optional[list[str]] = None,
                  seen: Optional[SeenStore] = None,
-                 owned: Optional[frozenset] = None):
+                 owned: Optional[frozenset] = None,
+                 delivery: Optional["DeliveryLog"] = None):
         self.channels = channels or [
             c.strip() for c in os.getenv("SANWAAD_CHANNELS", "mock").split(",") if c.strip()
         ]
         self.seen = seen or SeenStore()
         self.owned = OWNED_CHANNELS if owned is None else owned
+        self.delivery = delivery or DELIVERY
 
     def needs_mention(self, channel: str) -> bool:
         return channel not in self.owned
@@ -192,6 +198,15 @@ class Listener:
         reply is embarrassing, but a complaint that silently evaporated is the
         failure this whole system exists to prevent, so the tie goes to
         replaying.
+
+        Replaying needs a floor, though. An item that fails for a reason that
+        will never clear is otherwise refetched every cycle forever, spending a
+        whole graph run each time and leaving nothing behind but another
+        identical log line. After `max_attempts` it is declared dead: written
+        to the delivery log with the errors that killed it, and marked seen so
+        the loop stops paying for it. Dead is not lost — `python -m
+        sanwaad.delivery` lists it with the customer's words and the error, and
+        `--requeue` puts it back once the cause is fixed.
         """
         cycles = 0
         while max_cycles is None or cycles < max_cycles:
@@ -205,8 +220,19 @@ class Listener:
                 try:
                     await handler(complaint)
                     self.seen.mark([complaint])
+                    self.delivery.clear(complaint)
                 except Exception as exc:
-                    logger.error(f"listener: handler failed for {complaint.external_id}: {exc}")
+                    failure = self.delivery.record_failure(complaint, exc)
+                    if failure.dead:
+                        self.seen.mark([complaint])
+                        logger.error(
+                            f"listener: {complaint.external_id} dead-lettered after "
+                            f"{failure.attempts} attempts: {exc}")
+                    else:
+                        logger.warning(
+                            f"listener: handler failed for {complaint.external_id} "
+                            f"(attempt {failure.attempts}/{self.delivery.max_attempts}, "
+                            f"will retry): {exc}")
             cycles += 1
             if max_cycles is None or cycles < max_cycles:
                 await asyncio.sleep(interval_s)

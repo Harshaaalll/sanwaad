@@ -492,8 +492,22 @@ failures.
   treated as *unverified* and goes to a person
   (`test_a_grounding_check_that_could_not_run_is_never_read_as_grounded`).
 
+- **Retrying needs a floor, or it is a leak.** The listener marks an item seen
+  only after its handler returns, so a crash replays it rather than losing it —
+  a duplicate reply is embarrassing, an evaporated complaint is the failure the
+  system exists to prevent. On its own that rule is unbounded: an item that
+  fails deterministically is refetched every cycle forever, spends a whole
+  graph run each time, and leaves nothing behind but another identical log
+  line. Unhandled *and* invisible is the worst of both. After three attempts
+  `delivery.py` declares it **dead**: the errors and the customer's own words
+  are written down and the item is marked seen, so the loop stops paying for
+  it. Dead is not lost — `python -m sanwaad.delivery` lists it, `--requeue`
+  puts it back once the cause is fixed. That last verb is what makes it a queue
+  and not a log file.
+
 **Try it.** Read `closure.degraded_steps` in any case's state. When a step fell
-back, it is named there.
+back, it is named there. Then run `python -m sanwaad.delivery` to see what, if
+anything, gave up.
 
 <details><summary><b>Check yourself:</b> Why does <code>check_reply</code> repair phone numbers but block money promises?</summary>
 
@@ -649,6 +663,7 @@ span or audit record is written, not afterwards.
 | Context design | `context.py`, `rag/` | retrieval eval |
 | Observability | traces, audit log | span and audit tests |
 | Security and privacy | guardrails, redaction, retention | redaction and prune tests |
+| Nothing retried forever | `delivery.py`, `listener.watch` | `test_a_poisoned_item_stops_being_refetched` |
 
 ---
 

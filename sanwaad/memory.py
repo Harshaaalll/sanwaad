@@ -86,6 +86,15 @@ MEMORY_MAP: list[MemoryTier] = [
         "Ids only",
         "Forgetting this means replying twice in public."),
     MemoryTier(
+        "Delivery failures", "operational", "JSON file, bounded to 500 records",
+        ("sanwaad.delivery", "DELIVERY_PATH"),
+        "Items that could not be handled: attempts, the errors, the customer's words",
+        90, True,
+        "Never — this one is read by a person, not by a prompt",
+        "The excerpt is redacted at write time",
+        "An item retried forever is both unhandled and invisible. This is where "
+        "one stops being retried and becomes someone's job."),
+    MemoryTier(
         "Human corrections", "episodic", "JSONL",
         ("sanwaad.feedback", "FEEDBACK_PATH"),
         "What the model drafted vs what a reviewer actually sent",

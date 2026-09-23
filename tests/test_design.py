@@ -434,8 +434,11 @@ def test_prune_removes_only_what_retention_allows(tmp_path, monkeypatch):
 def test_every_memory_tier_states_its_model_exposure_and_personal_data():
     from sanwaad.memory import MEMORY_MAP
 
-    assert len(MEMORY_MAP) == 10
+    assert len(MEMORY_MAP) == 11
     assert all(t.reaches_model and t.personal_data and t.why for t in MEMORY_MAP)
+    # Every tier must name a path that resolves, or the retention pass quietly
+    # skips a store and nobody notices it growing until the disk does.
+    assert all(t.path() for t in MEMORY_MAP)
 
 
 def test_the_cross_case_window_never_stores_identifiers(tmp_path):
