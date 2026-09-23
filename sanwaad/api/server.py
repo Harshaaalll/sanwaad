@@ -26,6 +26,12 @@ if str(_ROOT) not in sys.path:
 
 from sanwaad.connectors import get_connector          # noqa: E402
 from sanwaad.delivery import DELIVERY                 # noqa: E402
+from sanwaad.limits import (                          # noqa: E402
+    CALLS,
+    CASES,
+    AtCapacity,
+    report as limits_report,
+)
 from sanwaad.models import Citation, Complaint        # noqa: E402
 from sanwaad.pipeline import (                        # noqa: E402
     get_case,
@@ -125,6 +131,11 @@ async def ready():
     tripped = [c for c in REGISTRY.breaker.report() if c["state"] != "closed"]
     if tripped:
         state["circuits"] = tripped
+
+    # A saturated pool and an idle one look identical from outside until
+    # something reports the queue. By the time the only signal is latency, it
+    # is too late to act on.
+    state["concurrency"] = limits_report()
     return JSONResponse(state, status_code=200 if state["ready"] else 503)
 
 
@@ -143,25 +154,30 @@ async def ingest(req: IngestRequest):
     connector = get_connector(req.channel)
     complaints = await connector.fetch(limit=req.limit)
 
-    results = []
-    for complaint in complaints:
+    async def _one(complaint: Complaint) -> dict:
         try:
             out = await run_case(complaint)
-            results.append({
+            return {
                 "case_id": out["case_id"],
                 "author": complaint.author,
                 "pending": bool(out["pending"]),
                 "triage": out["state"].get("triage"),
-            })
+            }
         except Exception as exc:  # one bad item must not stall the batch
             # Recorded in the same place the listener records its failures, so
             # there is one queue to read rather than one per entry point.
             failure = DELIVERY.record_failure(complaint, exc)
             logger.exception(f"case failed for {complaint.external_id}")
-            results.append({"external_id": complaint.external_id, "error": str(exc),
-                            "attempts": failure.attempts, "status": failure.status})
+            return {"external_id": complaint.external_id, "error": str(exc),
+                    "attempts": failure.attempts, "status": failure.status}
 
-    return {"ingested": len(results), "cases": results}
+    # Concurrent, but bounded: `run_case` holds a slot in the CASES pool, so a
+    # batch of fifty runs four at a time rather than fifty at once or one after
+    # another. The bound lives at the choke point, not here, so every other
+    # caller gets it too.
+    results = list(await asyncio.gather(*(_one(c) for c in complaints)))
+    return {"ingested": len(results), "cases": results,
+            "concurrency": CASES.report()}
 
 
 # ---------------------------------------------------------------------------
@@ -263,23 +279,36 @@ async def api_offer(req: OfferRequest):
     brief = case["pending"]["brief"]
     citations = [Citation(**c) for c in state.get("citations", [])]
 
+    # A live call is refused, never queued. Someone is on the phone: a caller
+    # waiting for a slot is a caller listening to silence, and a busy signal is
+    # more honest than dead air.
+    if CALLS.running >= CALLS.limit:
+        CALLS.refused += 1
+        raise HTTPException(503, f"all {CALLS.limit} call slots are busy; try again shortly")
+
     connection = SmallWebRTCConnection(ice_servers=["stun:stun.l.google.com:19302"])
     await connection.initialize(sdp=req.sdp, type=req.type)
     _calls[req.case_id] = connection
 
     async def _drive():
         try:
-            outcome = await run_voice_call(
-                connection,
-                case_id=req.case_id,
-                complaint=state["complaint"]["text"],
-                public_reply=(state.get("review") or {}).get("final_text", ""),
-                summary=brief["summary"],
-                category=brief["category"],
-                language=brief["language"],
-                citations=citations,
-            )
+            # The check above answers the caller; this holds the slot for the
+            # length of the call and closes the race between the two, when two
+            # offers arrive before either has started.
+            async with CALLS.slot(wait=False):
+                outcome = await run_voice_call(
+                    connection,
+                    case_id=req.case_id,
+                    complaint=state["complaint"]["text"],
+                    public_reply=(state.get("review") or {}).get("final_text", ""),
+                    summary=brief["summary"],
+                    category=brief["category"],
+                    language=brief["language"],
+                    citations=citations,
+                )
             await resume_case(req.case_id, outcome.model_dump(mode="json"))
+        except AtCapacity:
+            logger.warning(f"voice call for {req.case_id} refused: all call slots busy")
         except Exception:
             logger.exception(f"voice call failed for {req.case_id}")
         finally:

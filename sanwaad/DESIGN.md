@@ -493,6 +493,22 @@ failures.
   treated as *unverified* and goes to a person
   (`test_a_grounding_check_that_could_not_run_is_never_read_as_grounded`).
 
+- **A bound on how much happens at once.** Complaints do not arrive evenly.
+  They arrive in bursts, because the thing people are complaining about is one
+  outage — which is precisely what the pattern agent exists to detect. So the
+  moment this system is most useful is the moment the most work arrives, and
+  unbounded that is a thundering herd: every case racing for the same model
+  quota and the same ledger, each one slower, some timing out, and the retry
+  logic turning every timeout into three more requests. `limits.py` puts two
+  pools at the choke points. A burst of fifty complaints runs four at a time,
+  and `peak_running` in the `/api/ingest` response says so.
+
+  The two pools behave differently, and that is the point. A **case** that
+  waits finishes late, which is fine: the customer is reading a public thread,
+  not holding a line. A **call** at capacity is *refused* with a 503, because
+  someone is on the phone and a caller waiting for a slot is a caller listening
+  to silence. A busy signal is more honest than dead air.
+
 - **Retries protect a call; a breaker protects the system.** A retry loop knows
   about one call and one bad moment. It cannot know that the last hundred calls
   also failed, so against a dependency that is simply *down* it makes things
@@ -717,6 +733,7 @@ span or audit record is written, not afterwards.
 | Security and privacy | guardrails, redaction, retention | redaction and prune tests |
 | Nothing retried forever | `delivery.py`, `listener.watch` | `test_a_poisoned_item_stops_being_refetched` |
 | A dead dependency is stopped calling | `tools/breaker.py` | `test_the_registry_stops_calling_a_dead_tool` |
+| Bounded concurrency under a burst | `limits.py` | `test_a_burst_runs_at_the_limit_not_all_at_once` |
 
 ---
 

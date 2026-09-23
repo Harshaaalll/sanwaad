@@ -16,6 +16,7 @@ from langgraph.types import Command
 
 from .config import CHECKPOINT_PATH
 from .graph import build_graph
+from .limits import CASES
 from .models import Complaint
 
 
@@ -46,9 +47,15 @@ def _interrupt_of(result: dict) -> Optional[dict]:
 
 
 async def run_case(complaint: Complaint, case_id: Optional[str] = None) -> dict:
-    """Start a case. Returns the state, plus `pending` if it stopped at a gate."""
+    """Start a case. Returns the state, plus `pending` if it stopped at a gate.
+
+    Bounded by the CASES pool. This is the one place every complaint enters the
+    graph, so it is the only place a limit has to be applied to hold — and
+    complaints arrive in bursts by their nature, because the thing people are
+    complaining about is one outage.
+    """
     case_id = case_id or new_case_id()
-    async with _session() as (graph, _):
+    async with CASES.slot(), _session() as (graph, _):
         result = await graph.ainvoke(
             {
                 "case_id": case_id,
@@ -63,8 +70,12 @@ async def run_case(complaint: Complaint, case_id: Optional[str] = None) -> dict:
 
 
 async def resume_case(case_id: str, payload: Any) -> dict:
-    """Resume a paused case with a review decision or a voice outcome."""
-    async with _session() as (graph, _):
+    """Resume a paused case with a review decision or a voice outcome.
+
+    Bounded by the same pool: resuming runs the rest of the graph, models and
+    tools included, so it is the same work under a different name.
+    """
+    async with CASES.slot(), _session() as (graph, _):
         result = await graph.ainvoke(Command(resume=payload), config=_config(case_id))
     return {"case_id": case_id, "state": result, "pending": _interrupt_of(result)}
 
