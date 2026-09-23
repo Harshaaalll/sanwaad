@@ -18,7 +18,7 @@ the minority of cases that were wrong.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable
 
 from ..models import Citation
 

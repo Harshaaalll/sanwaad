@@ -13,8 +13,6 @@ from ..config import JUDGE, REVIEW
 from ..context import minimal_text, untrusted, with_trust_rules
 from ..guardrails import check_complaint, check_reply
 from ..llm import NON_CALL_MODELS, format_citations, structured
-from ..obs import TRACER
-from ..router import route
 from ..models import (
     Category,
     Citation,
@@ -25,7 +23,9 @@ from ..models import (
     Triage,
     VoiceOutcome,
 )
+from ..obs import TRACER
 from ..rag.store import CATEGORY_CLAUSES, get_store
+from ..router import route
 from .state import GrievanceState, event
 
 # ---------------------------------------------------------------------------
@@ -880,7 +880,8 @@ async def review_gate_node(state: GrievanceState) -> dict:
     # Capture the correction while it exists. This is the only moment the pair
     # (what the model wrote, what a human actually sends) is available.
     try:
-        from ..feedback import FeedbackRecord, record as record_feedback
+        from ..feedback import FeedbackRecord
+        from ..feedback import record as record_feedback
 
         record_feedback(FeedbackRecord(
             case_id=state["case_id"], decision=review.decision,

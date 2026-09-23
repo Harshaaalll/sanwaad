@@ -23,11 +23,16 @@ from sanwaad.agents import AGENTS, ContractViolation, check_writes
 from sanwaad.context import minimal_text, untrusted, with_trust_rules
 from sanwaad.graph.graph import NODES
 from sanwaad.graph.nodes import act_node
+from sanwaad.loop import kernel as kernel_mod
 from sanwaad.tools import REGISTRY, ErrorCode, Risk, ToolError, ToolFailure, ToolRegistry, ToolSpec
 from sanwaad.tools import ledger as ledger_mod
 from sanwaad.tools import registry as registry_mod
-from sanwaad.tools.builtin import LookupTransactionIn, LookupTransactionOut, PostReplyIn, PostReplyOut
-from sanwaad.loop import kernel as kernel_mod
+from sanwaad.tools.builtin import (
+    LookupTransactionIn,
+    LookupTransactionOut,
+    PostReplyIn,
+    PostReplyOut,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -44,7 +49,9 @@ def _sealed(tmp_path, monkeypatch):
 
 def _audit(tmp_path) -> list[dict]:
     path = tmp_path / "audit.jsonl"
-    return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +434,7 @@ def test_prune_removes_only_what_retention_allows(tmp_path, monkeypatch):
     assert dry["Traces"]["removed"] == 1 and len(traces.read_text().splitlines()) == 3
 
     applied = {r["tier"]: r for r in memory.prune(now=now)}
-    names = [json.loads(l)["name"] for l in traces.read_text().splitlines()]
+    names = [json.loads(line)["name"] for line in traces.read_text().splitlines()]
     assert applied["Traces"]["removed"] == 1 and names == ["recent", "undated"]
 
 

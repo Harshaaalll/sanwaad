@@ -201,7 +201,8 @@ async def run_scenario(sc: LoopScenario, rung: int) -> dict:
             run = await support.handle_turn(sc.message, handle=sc.handle, config=config,
                                             policy=policy, memory=memory)
             audit_path = base / "tool_audit.jsonl"
-            audit = [json.loads(l) for l in audit_path.read_text().splitlines()] if audit_path.exists() else []
+            audit = ([json.loads(line) for line in audit_path.read_text().splitlines()]
+                     if audit_path.exists() else [])
         finally:
             kernel.LOOP_RUNS_PATH, support.CONVERSATIONS_PATH = saved
             REGISTRY.clear_faults()

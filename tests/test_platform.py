@@ -19,7 +19,6 @@ from sanwaad.obs import Tracer
 from sanwaad.rag.fusion import BM25, rrf, tokenize
 from sanwaad.router import route
 
-
 # --- guardrails: PII -------------------------------------------------------
 
 @pytest.mark.parametrize("text,kind", [

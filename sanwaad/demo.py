@@ -13,9 +13,8 @@ memory that accumulates on purpose in production and would make a demo lie.
 from __future__ import annotations
 
 import asyncio
-import sys
-
 import json
+import sys
 
 from .listener import SEEN_PATH, Listener
 from .llm import is_offline
@@ -153,7 +152,7 @@ async def main() -> int:
     print(f"  resolved       {closure['resolved']}")
     print(f"  cost           ₹{closure['total_cost_inr']:.4f}  "
           f"({closure['llm_calls']} model calls)")
-    print(f"  human baseline ₹18–85 for the same work")
+    print("  human baseline ₹18–85 for the same work")
     print(f"\n  consistency    "
           f"{GREEN + 'channels agree' + RESET if con['consistent'] else RED + 'DIVERGED' + RESET}")
     print(f"    shared     {con['shared_clauses']}")

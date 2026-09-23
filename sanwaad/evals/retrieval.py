@@ -58,7 +58,9 @@ def evaluate(name: str, retrieve: Retriever, k: int = 5,
         boost = CATEGORY_CLAUSES.get(case.category or "", ())
         got = retrieve(case.text, boost, k)
         r, s, m = _metrics(got, case.must_retrieve)
-        rec.append(r); st.append(s); mr.append(m)
+        rec.append(r)
+        st.append(s)
+        mr.append(m)
         lang.setdefault(case.lang, []).append(s)
         if s < 1.0:
             failures.append((case.id, case.must_retrieve, got))

@@ -20,6 +20,7 @@ from ..config import INDEX_PATH, POLICY_DIR
 from ..models import Citation
 from .embedder import embed, embed_one
 
+
 def _citable(c: dict) -> dict:
     """Clause fields the Citation model accepts — aliases are retrieval-only."""
     return {k: v for k, v in c.items() if k in ("clause_id", "doc", "heading", "text")}

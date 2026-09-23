@@ -35,7 +35,7 @@ import json
 import math
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -168,7 +168,10 @@ def assign_variant(key: str, experiment: str, variants: tuple[str, ...] = ("cont
     weights = weights or tuple(1.0 / len(variants) for _ in variants)
     point = int(hashlib.sha256(f"{experiment}\x00{key}".encode("utf-8")).hexdigest()[:8], 16) / 0xFFFFFFFF
     cumulative = 0.0
-    for variant, weight in zip(variants, weights):
+    # strict: mismatched weights would silently make the last variant
+    # unreachable, and an A/B arm nobody is assigned to looks like an arm
+    # that simply never wins.
+    for variant, weight in zip(variants, weights, strict=True):
         cumulative += weight
         if point <= cumulative:
             return variant

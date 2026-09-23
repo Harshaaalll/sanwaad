@@ -1,0 +1,26 @@
+# Ruff's defaults (pyflakes plus the pycodestyle rules that catch real
+# mistakes), and deliberately not the line-length rule.
+#
+# E501 is off because the long lines here are data: eval scenarios, routing
+# tables, policy fixtures. Wrapping a table to fit a column makes it harder to
+# read, and a linter that fights the shape of your data gets switched off
+# entirely. The rules that stay on are the ones that find bugs — an unused
+# import, an undefined name, a variable called `l`.
+target-version = "py312"
+line-length = 100
+
+[lint]
+# Only rules that find mistakes. `UP` is left out on the same principle as
+# E501: rewriting every `Optional[str]` to `str | None` is a style opinion, and
+# a lint run whose output is 263 opinions is one nobody reads.
+extend-select = [
+    "I",    # import order: mechanical, and nobody should review it by hand
+    "B",    # bugbear: mutable defaults, loop-variable capture in closures
+]
+ignore = [
+    "B008",  # FastAPI dependencies are function calls in defaults by design
+]
+
+[lint.per-file-ignores]
+# The tests import the thing they are about to patch, and say so.
+"tests/*" = ["E402"]

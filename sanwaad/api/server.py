@@ -24,23 +24,19 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from sanwaad.connectors import get_connector          # noqa: E402
-from sanwaad.delivery import DELIVERY                 # noqa: E402
-from sanwaad.limits import (                          # noqa: E402
-    CALLS,
-    CASES,
-    AtCapacity,
-    report as limits_report,
-)
-from sanwaad.models import Citation, Complaint        # noqa: E402
-from sanwaad.pipeline import (                        # noqa: E402
+from sanwaad.connectors import get_connector  # noqa: E402
+from sanwaad.delivery import DELIVERY  # noqa: E402
+from sanwaad.limits import CALLS, CASES, AtCapacity  # noqa: E402
+from sanwaad.limits import report as pool_report  # noqa: E402
+from sanwaad.models import Citation, Complaint  # noqa: E402
+from sanwaad.pipeline import (  # noqa: E402
     get_case,
     list_cases,
     resume_case,
     run_case,
 )
-from sanwaad.rag.store import get_store               # noqa: E402
-from sanwaad.tools import REGISTRY                    # noqa: E402
+from sanwaad.rag.store import get_store  # noqa: E402
+from sanwaad.tools import REGISTRY  # noqa: E402
 
 _BOOTED_AT = time.time()
 
@@ -135,7 +131,7 @@ async def ready():
     # A saturated pool and an idle one look identical from outside until
     # something reports the queue. By the time the only signal is latency, it
     # is too late to act on.
-    state["concurrency"] = limits_report()
+    state["concurrency"] = pool_report()
     return JSONResponse(state, status_code=200 if state["ready"] else 503)
 
 
@@ -340,7 +336,6 @@ async def call_page(case_id: str):
 
 def main():
     import uvicorn
-
     from dotenv import load_dotenv
 
     load_dotenv(_ROOT / ".env")

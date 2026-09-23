@@ -1,5 +1,7 @@
 # संवाद Sanwaad
 
+[![tests](https://github.com/Harshaaalll/sanwaad/actions/workflows/ci.yml/badge.svg)](https://github.com/Harshaaalll/sanwaad/actions/workflows/ci.yml)
+
 **A multi-agent system that turns public complaints into resolved cases.** It
 catches the complaints nobody tagged, works out who is speaking and whether
 they're part of an outage, drafts a reply grounded in written policy, and
@@ -322,6 +324,7 @@ tests/            277 tests
 | 2026-09-23 | `2314057` | Latency budgets that something reads: every route declares `max_latency_ms`, the model layer records a breach without aborting the step, and `stage_stats` compares each step's p95 against it via a new `python -m sanwaad.obs` |
 | 2026-09-23 | `e4c15e2` | A circuit breaker per tool: five timeouts or upstream errors in a minute and calls fail fast instead of each case re-discovering the outage, with a single half-open probe to recover unattended |
 | 2026-09-23 | `fc6399a` | Bounded concurrency at the choke points: cases queue four at a time so a burst does not become a thundering herd, live calls are refused rather than queued, and both pools report their depth on `/ready` |
+| 2026-09-23 | `TBD6` | CI on every push: ruff, the 277 tests, both evals, and a Docker build that boots the image and waits for `/ready` — plus the 17 lint findings that had accumulated, including three `zip()` calls that would truncate silently |
 
 `git log --oneline` for the full history. The repo starts from a clean commit:
 earlier exploratory work on speech-to-speech voice agents lives in a separate

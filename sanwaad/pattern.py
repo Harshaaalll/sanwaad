@@ -171,7 +171,10 @@ def cosine(a: Iterable[float], b: Iterable[float]) -> float:
     av, bv = list(a), list(b)
     if not av or not bv or len(av) != len(bv):
         return 0.0
-    return float(sum(x * y for x, y in zip(av, bv)))
+    # strict: the length guard above already holds, and saying so here means
+    # a future change that breaks it fails loudly instead of silently
+    # truncating the dot product to the shorter vector.
+    return float(sum(x * y for x, y in zip(av, bv, strict=True)))
 
 
 def assess_cluster(

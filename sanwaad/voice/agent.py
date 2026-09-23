@@ -10,9 +10,7 @@ possible for customers who want an actual call; see `escalation.channel`.
 from __future__ import annotations
 
 import os
-import sys
 import time
-from typing import Optional
 
 from loguru import logger
 
@@ -100,7 +98,6 @@ async def run_voice_call(
         LLMRunFrame,
         MetricsFrame,
         TranscriptionFrame,
-        TTSSpeakFrame,
         TTSTextFrame,
     )
     from pipecat.metrics.metrics import LLMUsageMetricsData, TTSUsageMetricsData

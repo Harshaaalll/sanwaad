@@ -96,7 +96,9 @@ def rrf(rankings: Iterable[list[int]], k: int = RRF_K,
     rankings = list(rankings)
     weights = weights or [1.0] * len(rankings)
     fused: dict[int, float] = {}
-    for w, ranking in zip(weights, rankings):
+    # strict: a caller passing fewer weights than rankings would otherwise
+    # have its last retriever silently dropped from the fusion.
+    for w, ranking in zip(weights, rankings, strict=True):
         for rank, doc in enumerate(ranking):
             fused[doc] = fused.get(doc, 0.0) + w / (k + rank + 1)
     return sorted(fused.items(), key=lambda kv: -kv[1])

@@ -25,7 +25,6 @@ from sanwaad.graph.nodes import (
 from sanwaad.rag.store import CATEGORY_CLAUSES, get_store
 from sanwaad.voice.brief import CitationTracker
 
-
 # --- Routing safety --------------------------------------------------------
 
 # The drop decision moved from `_after_triage` to `_after_prioritise` when the

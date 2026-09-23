@@ -22,7 +22,6 @@ from sanwaad.rag.store import get_store
 from sanwaad.voice.brief import MAX_HOTWORDS, build_hotwords, build_voice_prompt
 from sanwaad.voice.numbers import normalise, spoken_amount
 
-
 # --- Numbers: the conversions that must happen ----------------------------
 
 @pytest.mark.parametrize("spoken,value", [
