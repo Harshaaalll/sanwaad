@@ -163,6 +163,45 @@ async def test_a_transient_failure_still_gets_its_replay(tmp_path, monkeypatch):
     assert log.load() == []                     # and left no trace behind
 
 
+def test_a_partially_written_file_is_never_read(tmp_path):
+    """The listener and the API are separate processes against one file.
+    `write_text` truncates then writes, and `load` treats unparseable JSON as
+    an empty queue — so a reader landing in that window silently wiped every
+    attempt counter and restarted the unbounded retry loop this module exists
+    to stop. Writing to a temp file and renaming makes the swap atomic.
+    """
+    log = DeliveryLog(path=tmp_path / "delivery.json", max_attempts=3)
+    log.record_failure(_complaint("mock_a"), ValueError("boom"))
+
+    seen = []
+    for _ in range(40):
+        log.record_failure(_complaint("mock_b"), ValueError("boom"))
+        seen.append(len(DeliveryLog(path=log.path).load()))   # a concurrent reader
+    assert 0 not in seen          # never observed as empty mid-write
+
+
+def test_truncation_keeps_what_is_closest_to_giving_up(tmp_path):
+    """Dropping the oldest records drops the longest-running failures, which
+    are exactly the ones nearest the limit. Their counters would reset and the
+    item would start its three lives over."""
+    log = DeliveryLog(path=tmp_path / "delivery.json", max_attempts=3, max_records=5)
+    old_one = _complaint("mock_old")
+    log.record_failure(old_one, ValueError("boom"))
+    log.record_failure(old_one, ValueError("boom"))        # two attempts in
+    for i in range(20):
+        log.record_failure(_complaint(f"mock_new_{i}"), ValueError("boom"))
+    assert any(f.key == delivery_key(old_one) for f in log.load())
+
+
+def test_the_path_is_resolved_at_construction(tmp_path, monkeypatch):
+    """Binding DELIVERY_PATH as a default argument freezes it at import, so the
+    eval harness redirecting it would be silently ignored."""
+    import sanwaad.delivery as delivery_mod
+
+    monkeypatch.setattr(delivery_mod, "DELIVERY_PATH", tmp_path / "redirected.json")
+    assert delivery_mod.DeliveryLog().path == tmp_path / "redirected.json"
+
+
 # --- the operator's side --------------------------------------------------
 
 def test_requeue_clears_both_stores_or_the_item_never_returns(tmp_path, monkeypatch):

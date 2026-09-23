@@ -26,7 +26,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from sanwaad.connectors import get_connector  # noqa: E402
-from sanwaad.delivery import DELIVERY  # noqa: E402
+from sanwaad.delivery import DEAD, DELIVERY  # noqa: E402
 from sanwaad.limits import CALLS, CASES  # noqa: E402
 from sanwaad.limits import report as pool_report  # noqa: E402
 from sanwaad.models import Citation, Complaint  # noqa: E402
@@ -184,8 +184,20 @@ async def ingest(req: IngestRequest):
     complaints = await connector.fetch(limit=req.limit)
 
     async def _one(complaint: Complaint) -> dict:
+        # A known-dead item is not retried here either. Without this, clicking
+        # Ingest against a poisoned feed runs the whole graph on it again every
+        # time and drives its attempt count past the limit that declared it
+        # dead in the first place.
+        if DELIVERY.is_dead(complaint):
+            return {"external_id": complaint.external_id, "status": DEAD,
+                    "error": "dead-lettered; requeue it first"}
         try:
             out = await run_case(complaint)
+            # The listener clears a past failure on success and this did not,
+            # so an item that failed once through the API stayed in the queue
+            # forever, and its next two failures anywhere dead-lettered it after
+            # what an operator experiences as two attempts, not three.
+            DELIVERY.clear(complaint)
             return {
                 "case_id": out["case_id"],
                 "author": complaint.author,

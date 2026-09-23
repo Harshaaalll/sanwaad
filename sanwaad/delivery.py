@@ -32,6 +32,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
@@ -83,9 +84,12 @@ class DeliveryLog:
     can prune it like every other dated store, with no special case.
     """
 
-    def __init__(self, path: Path = DELIVERY_PATH, max_attempts: int = MAX_ATTEMPTS,
+    def __init__(self, path: Optional[Path] = None, max_attempts: int = MAX_ATTEMPTS,
                  max_records: int = 500):
-        self.path = path
+        # Resolved here, not bound as a default: a default argument freezes
+        # DELIVERY_PATH at import, so anything that redirects it — the eval
+        # harness, a test — is silently ignored by every store built afterwards.
+        self.path = path or DELIVERY_PATH
         self.max_attempts = max_attempts
         self.max_records = max_records
 
@@ -110,9 +114,28 @@ class DeliveryLog:
         return out
 
     def save(self, failures: list[Failure]) -> None:
+        """Write via a temporary file and rename over the old one.
+
+        `write_text` truncates and then writes, so a reader between the two
+        sees a partial document. `load` treats unparseable JSON as an empty
+        queue — a deliberate choice, so that a corrupt file cannot stop the
+        listener — and the two together are worse than either: every attempt
+        counter silently restarts at zero and the unbounded retry loop this
+        module exists to stop comes back. The listener and the API server are
+        separate processes against one file, so that window is real. A rename
+        within a directory is atomic, so a reader sees the old file or the new
+        one and never half of either.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        rows = [asdict(f) for f in failures[-self.max_records:]]
-        self.path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+        # Truncation drops the OLDEST records, which are the longest-running
+        # failures — exactly the ones closest to being dead-lettered. Keep the
+        # dead ones and the highest attempt counts instead of the newest.
+        kept = sorted(failures, key=lambda f: (f.status == DEAD, f.attempts),
+                      reverse=True)[:self.max_records]
+        rows = [asdict(f) for f in sorted(kept, key=lambda f: f.first_at)]
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(self.path)
 
     # --- the two calls the poll loop makes ----------------------------------
 
@@ -165,6 +188,11 @@ class DeliveryLog:
         return True
 
     # --- the operator's side ------------------------------------------------
+
+    def is_dead(self, complaint: Complaint) -> bool:
+        """Has this item already given up? Callers must not replay one."""
+        key = delivery_key(complaint)
+        return any(f.key == key and f.status == DEAD for f in self.load())
 
     def dead(self) -> list[Failure]:
         return [f for f in self.load() if f.status == DEAD]
