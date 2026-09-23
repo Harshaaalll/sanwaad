@@ -76,6 +76,26 @@ def test_a_missing_model_key_is_reported_but_is_not_a_failure(client, monkeypatc
     assert r.json()["models"] == "offline"
 
 
+def test_an_open_circuit_is_reported_but_does_not_refuse_traffic(client):
+    """A tool being down is the case the system is built to degrade around —
+    it opens a ticket instead of inventing an answer. Failing readiness here
+    would turn one dead dependency into a dead service, which is precisely what
+    the breaker exists to prevent."""
+    from sanwaad.tools import ErrorCode
+    from sanwaad.tools.breaker import BreakerPolicy, CircuitBreaker
+
+    breaker = CircuitBreaker(BreakerPolicy(threshold=1))
+    breaker.record_outcome("lookup_transaction", ErrorCode.UPSTREAM)
+    server.REGISTRY.breaker, saved = breaker, server.REGISTRY.breaker
+    try:
+        r = client.get("/ready")
+        assert r.status_code == 200
+        assert r.json()["circuits"][0]["tool"] == "lookup_transaction"
+        assert r.json()["circuits"][0]["state"] == "open"
+    finally:
+        server.REGISTRY.breaker = saved
+
+
 @pytest.mark.asyncio
 async def test_warming_records_a_failure_instead_of_crashing_startup(monkeypatch):
     """If the index cannot be built, the process must come up and say so. A

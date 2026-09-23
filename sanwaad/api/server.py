@@ -34,6 +34,7 @@ from sanwaad.pipeline import (                        # noqa: E402
     run_case,
 )
 from sanwaad.rag.store import get_store               # noqa: E402
+from sanwaad.tools import REGISTRY                    # noqa: E402
 
 _BOOTED_AT = time.time()
 
@@ -116,6 +117,14 @@ async def ready():
     }
     if _READY["error"]:
         state["error"] = _READY["error"]
+
+    # Also reported, also not a reason to fail: an open circuit means a tool is
+    # down and the system is deliberately degrading around it, which is working
+    # as designed. Refusing traffic here would turn one dead dependency into a
+    # dead service, which is the thing the breaker exists to avoid.
+    tripped = [c for c in REGISTRY.breaker.report() if c["state"] != "closed"]
+    if tripped:
+        state["circuits"] = tripped
     return JSONResponse(state, status_code=200 if state["ready"] else 503)
 
 

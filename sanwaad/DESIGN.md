@@ -493,6 +493,29 @@ failures.
   treated as *unverified* and goes to a person
   (`test_a_grounding_check_that_could_not_run_is_never_read_as_grounded`).
 
+- **Retries protect a call; a breaker protects the system.** A retry loop knows
+  about one call and one bad moment. It cannot know that the last hundred calls
+  also failed, so against a dependency that is simply *down* it makes things
+  worse: every case spends its full retry allowance rediscovering the outage,
+  customers wait through three timeouts each, and the backend is hammered while
+  it tries to come back. `tools/breaker.py` remembers what a retry loop cannot.
+  After five failures in a minute the tool's circuit **opens**, and further
+  calls return `CIRCUIT_OPEN` in a millisecond instead of waiting nine seconds
+  for a timeout that is by now entirely predictable. Sanwaad already knows what
+  to do with an unavailable lookup — open a ticket, promise nothing — and it
+  can now do that immediately.
+
+  Two details are the whole design. **What counts as a failure:** only
+  `TIMEOUT` and `UPSTREAM`, because only those say the dependency is unwell. A
+  `CONFLICT` or a `NOT_FOUND` is an *answer* — the backend is alive and
+  disagreeing with us. A breaker that counted those would open on healthy
+  traffic and take the system down in the name of protecting it, which is the
+  classic way this pattern is got wrong. **Half-open:** once the cooldown
+  expires exactly one call is let through to find out. Without it, something
+  has to decide when the outage is over, and that something is a person at 3am.
+  With the whole backlog let through at once, recovery is a retry storm on a
+  timer.
+
 - **Retrying needs a floor, or it is a leak.** The listener marks an item seen
   only after its handler returns, so a crash replays it rather than losing it —
   a duplicate reply is embarrassing, an evaporated complaint is the failure the
@@ -693,6 +716,7 @@ span or audit record is written, not afterwards.
 | Observability | traces, audit log | span and audit tests |
 | Security and privacy | guardrails, redaction, retention | redaction and prune tests |
 | Nothing retried forever | `delivery.py`, `listener.watch` | `test_a_poisoned_item_stops_being_refetched` |
+| A dead dependency is stopped calling | `tools/breaker.py` | `test_the_registry_stops_calling_a_dead_tool` |
 
 ---
 

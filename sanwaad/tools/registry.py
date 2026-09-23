@@ -34,6 +34,7 @@ from ..agents import may_call
 from ..config import DATA_DIR
 from ..guardrails import redact
 from ..obs import TRACER
+from .breaker import CircuitBreaker
 from .contracts import (
     Approval,
     ErrorCode,
@@ -79,10 +80,12 @@ def _approval_problem(spec: ToolSpec, inp: BaseModel, approval: Optional[Approva
 
 
 class ToolRegistry:
-    def __init__(self, audit_path: Optional[Path] = None):
+    def __init__(self, audit_path: Optional[Path] = None,
+                 breaker: Optional[CircuitBreaker] = None):
         self._tools: dict[str, ToolSpec] = {}
         self._faults: dict[str, list[ToolError]] = {}
         self.audit_path = audit_path
+        self.breaker = breaker or CircuitBreaker()
 
     # --- registration -----------------------------------------------------
 
@@ -110,7 +113,11 @@ class ToolRegistry:
         self._faults.setdefault(name, []).extend([error] * times)
 
     def clear_faults(self) -> None:
+        # The breakers too: a scenario that injected an outage leaves the
+        # circuit it tripped behind it, and the next scenario would start
+        # against a tool that is still failing fast for reasons of its own.
         self._faults.clear()
+        self.breaker.reset()
 
     def _next_fault(self, name: str) -> Optional[ToolError]:
         queue = self._faults.get(name)
@@ -143,6 +150,7 @@ class ToolRegistry:
             result.audit_id = uuid.uuid4().hex[:10]
             span.set(ok=result.ok, attempts=result.attempts,
                      risk=spec.risk.value if spec else None,
+                     circuit=self.breaker.state(name),
                      tool_error=result.error.code.value if result.error else None)
         self._audit(result, spec, agent, args, approval, trace_id)
         return result
@@ -172,6 +180,13 @@ class ToolRegistry:
         retry_safe = spec.risk is Risk.READ or spec.idempotent
         max_attempts = 1 + (spec.max_retries if retry_safe else 0)
 
+        # Ask the breaker before spending anything. A tool that is already
+        # failing does not need this call's retries to prove it again, and the
+        # caller gets its answer in a millisecond instead of a timeout.
+        if not self.breaker.allows(name):
+            return refuse(ErrorCode.CIRCUIT_OPEN,
+                          f"{name} is failing; not called (circuit open)")
+
         last: Optional[ToolError] = None
         attempt = 0
         for attempt in range(1, max_attempts + 1):
@@ -195,10 +210,18 @@ class ToolRegistry:
                     payload = raw.model_dump() if isinstance(raw, BaseModel) else raw
                     out = spec.output_model.model_validate(payload)
                 except ValidationError as exc:
+                    # The backend answered, just not in contract. That is our
+                    # disagreement with it, not evidence that it is down.
+                    self.breaker.record_outcome(name, ErrorCode.INVALID_OUTPUT)
                     return ToolResult(tool=name, ok=False, attempts=attempt, error=ToolError(
                         code=ErrorCode.INVALID_OUTPUT, message=_summarise(exc)))
+                self.breaker.record_outcome(name)
                 return ToolResult(tool=name, ok=True, attempts=attempt,
                                   output=out.model_dump(mode="json"))
+            # Counted per attempt, not per call: three retries against a dead
+            # backend are three dead requests, and the breaker should see the
+            # damage at the rate it is actually being done.
+            self.breaker.record_outcome(name, last.code)
             if not last.retryable:
                 break
         return ToolResult(tool=name, ok=False, attempts=attempt, error=last)

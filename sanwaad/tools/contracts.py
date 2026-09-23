@@ -47,6 +47,7 @@ class ErrorCode(str, Enum):
     TIMEOUT = "timeout"
     UPSTREAM = "upstream_error"
     INVALID_OUTPUT = "invalid_output"   # backend answered, but not in contract
+    CIRCUIT_OPEN = "circuit_open"       # we did not call: this tool is failing
 
 
 class ToolError(BaseModel):
