@@ -77,8 +77,15 @@ def test_an_amount_is_written_so_the_existing_triage_regex_finds_it():
     "do you have my refund",          # `do` is 2 in Hindi and a verb in English
     "one moment please",              # a lone unit is not a figure
     "bayalis hazaar rupaye",          # 42 in Hindi: not in the tables, so declined
+    "bayalis hazaar paanch sau rupaye",   # ...and still declined mid-sentence
+    "ikkyavan hazaar do sau rupees",      # 51,200: same, in another spelling
     "hazaar rupaye",                  # a scale with nothing in front of it
     "saath mein bhejo",               # 60, or "with" — never guessed
+    "do hazaar hazaar",               # a stutter on the scale word
+    "paanch sau sau",
+    "char lakh crore",                # two scales, ascending
+    "do do hazaar",                   # a stutter on the unit
+    "twenty twenty",
 ])
 def test_ambiguous_text_is_left_exactly_as_spoken(text):
     found = normalise(text)
@@ -87,10 +94,58 @@ def test_ambiguous_text_is_left_exactly_as_spoken(text):
     assert found.values == []
 
 
-def test_an_unknown_hindi_number_does_not_become_the_bare_scale():
-    """The failure this guard exists for: "bayalis hazaar" is 42,000, and
-    reading the `hazaar` alone would hand the ledger a confident 1,000."""
-    assert 1000 not in normalise("bayalis hazaar").values
+@pytest.mark.parametrize("said,never", [
+    ("bayalis hazaar", 1000),                  # 42,000
+    ("bayalis hazaar paanch sau", 1500),       # 42,500 — the mid-sentence form
+    ("ikkyavan hazaar do sau", 1200),          # 51,200
+])
+def test_an_unknown_hindi_number_never_becomes_the_bare_scale(said, never):
+    """The failure this guard exists for: the tables do not know `bayalis`, so
+    `hazaar` starts a run with nothing in front of it, and reading it as one
+    thousand hands the ledger a confident wrong figure.
+
+    The earlier version of this test only passed "bayalis hazaar", which is the
+    one case the first guard happened to catch. Anything the customer said
+    afterwards joined the run and the guard stopped firing — 42,500 came out as
+    ₹1,500. A test weaker than its own docstring is how that survived.
+    """
+    found = normalise(said)
+    assert never not in found.values
+    assert found.text == said            # left exactly as spoken
+    assert spoken_amount(said) is None
+
+
+def test_a_grouped_figure_is_read_as_one_number():
+    """"₹4,500" is four thousand five hundred rupees, not four. The tokeniser
+    split on the comma and only the group beside the currency symbol counted."""
+    assert normalise("₹4,500").amounts_inr == [4500]
+    assert normalise("Rs. 4,500 debited").amounts_inr == [4500]
+    assert normalise("I paid 1,20,000 rupees").amounts_inr == [120_000]
+
+
+def test_normalising_twice_gives_the_same_answer():
+    """The module renders amounts with grouping, so its own output has to be
+    readable to it. It was not: a second pass turned ₹4,500 into ₹4. The voice
+    processor mutates the frame in place, so any frame that reaches it twice
+    took that path."""
+    once = normalise("chaar hazaar paanch sau rupaye")
+    twice = normalise(once.text)
+    assert once.amounts_inr == twice.amounts_inr == [4500]
+    assert twice.text == once.text
+
+
+def test_a_sentence_boundary_ends_a_number():
+    """"refund of 640. Two orders" became "refund of 642 orders": the period
+    was swallowed into the number token, so the run continued into the next
+    sentence, ate its first word and invented 642."""
+    found = normalise("refund of 640. Two orders")
+    assert found.text == "refund of 640. Two orders"
+    assert 642 not in found.values
+
+    # The number before the stop is still read, and the word after it survives.
+    after = normalise("It was paanch sau. Do you have it?")
+    assert after.values == [500]
+    assert "Do you have it?" in after.text
 
 
 def test_digits_already_in_the_text_are_not_rewritten():

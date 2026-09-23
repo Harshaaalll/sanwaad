@@ -971,10 +971,13 @@ side, and they are harness, not intelligence:
 | `voice/brief.py` · `build_hotwords` | the bias vocabulary for *this* call, from the complaint and its retrieved clauses | a hand-written word list drifts from the case; a derived one cannot |
 
 Both follow the rule that makes a harness trustworthy rather than merely busy:
-**when it is not sure, it does nothing.** `bayalis hazaar` is 42,000, the
-tables do not know `bayalis`, and reading the `hazaar` alone as 1,000 would put
-a confident wrong figure into a ledger lookup — so it is left exactly as
-spoken. A wrong amount is worse than an unconverted one, because a wrong amount
+**when it is not sure, it does nothing.** `bayalis hazaar paanch sau` is
+42,500, the tables do not know `bayalis`, and reading the `hazaar` alone as
+1,000 would put ₹1,500 into a ledger lookup — so the whole phrase is left
+exactly as spoken. That example is the real one: the first version of this
+guard only fired when the unknown word ended the sentence, and a test that
+asserted the two-word case while its docstring claimed the general one let it
+through. A wrong amount is worse than an unconverted one, because a wrong amount
 looks like a fact. The same instinct decides what leaves the building: a
 reference number would be an excellent hotword, and it is never sent, because a
 bias list goes to a third party.

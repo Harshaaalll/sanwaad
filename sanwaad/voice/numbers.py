@@ -45,9 +45,16 @@ Hindi has an irregular, non-compositional word for every number from 21 to 99
 (`ikkyavan` is 51, not "fifty one"), spelled a dozen ways by different ASR
 models. Encoding a guessed table would produce confident wrong amounts, which
 is precisely the failure this module exists to prevent. Round tens are covered;
-`bayalis hazaar` is not, and is left as text for a person to read. 60 is left
-out too: `saath` is both "sixty" and "with", and no adjacency rule separates
-them reliably.
+`bayalis hazaar` is not, and is left as text for a person to read — including
+when the sentence carries on afterwards, which is the case an earlier version
+of this module got wrong.
+
+It also declines what is malformed rather than repairing it. A scale needs
+something in front of it, scales must strictly decrease (crore, lakh, thousand,
+hundred, each at most once) and so must the additive words, so an ASR stutter
+like "do hazaar hazaar" or "do do hazaar" is declined instead of being read as
+3,000 or 4,000. Repetition and disorder are what a garbled number looks like,
+and neither is worth guessing at.
 """
 
 from __future__ import annotations
@@ -151,8 +158,23 @@ _NUMBER_WORDS = {**_UNITS, **_TEENS, **_TENS}
 # The Devanagari range is spelled out because Python's `\w` excludes combining
 # marks: without it, "हज़ार" tokenises as "हज", "़", "ा", "र" and every Hindi
 # number word in the tables above becomes unreachable.
-_TOKEN = re.compile(r"[₹]|[\wऀ-ॿ.]+|\s+|[^\s\w]", re.UNICODE)
-_DIGITS_ONLY = re.compile(r"^\d+$")
+# Digits first, and as a whole figure: a grouped "4,500" and a decimal "4.50"
+# are each ONE token. Tokenising them as "4" / "," / "500" made `₹4,500` read
+# as ₹4 — the first group only, because that is the group the currency symbol
+# was adjacent to. It also made the module non-idempotent: it renders amounts
+# with grouping, so its own output was unreadable to it.
+#
+# The trailing period is deliberately NOT part of a token. It used to be, and
+# "refund of 640. Two orders" became "refund of 642 orders": the period was
+# stripped for the lookup, so the run continued across the sentence boundary,
+# ate the next sentence's first word and invented 642.
+_TOKEN = re.compile(r"[₹]|\d[\d,]*(?:\.\d+)?|[\wऀ-ॿ]+|\s+|[^\s\w]", re.UNICODE)
+_NUMERIC = re.compile(r"^\d[\d,]*(?:\.\d+)?$")
+
+
+def _numeric(token: str) -> float:
+    """A digit token's value. Grouping separators are ours, not the speaker's."""
+    return float(token.replace(",", ""))
 
 
 @dataclass
@@ -186,7 +208,7 @@ def _is_number_token(word: str) -> bool:
     return (word in _NUMBER_WORDS or word in _SCALES or word in _REPEATERS
             or word in _FIXED_FRACTIONS or word in _HALF_BEFORE
             or word in _QUARTER_MORE or word in _QUARTER_LESS
-            or bool(_DIGITS_ONLY.match(word)))
+            or bool(_NUMERIC.match(word)))
 
 
 def _anchored(words: list[str]) -> bool:
@@ -196,7 +218,7 @@ def _anchored(words: list[str]) -> bool:
     anchored by `hazaar`; "do you" is not anchored at all, so nothing in it is
     treated as a number.
     """
-    return any(w not in _AMBIGUOUS and _is_number_token(w) and not _DIGITS_ONLY.match(w)
+    return any(w not in _AMBIGUOUS and _is_number_token(w) and not _NUMERIC.match(w)
                for w in words) or any(w in _SCALES and w not in _AMBIGUOUS for w in words)
 
 
@@ -217,7 +239,7 @@ def _as_digit_string(words: list[str]) -> str | None:
             continue
         if w in _UNITS:
             digit = str(_UNITS[w])
-        elif _DIGITS_ONLY.match(w) and len(w) == 1:
+        elif _NUMERIC.match(w) and len(w) == 1:
             digit = w
         else:
             return None
@@ -227,9 +249,27 @@ def _as_digit_string(words: list[str]) -> str | None:
 
 
 def _arithmetic(words: list[str]) -> float | None:
-    """Standard place-value accumulation, with the Indian scales included."""
+    """Standard place-value accumulation, with the Indian scales included.
+
+    Two rules keep a malformed phrase from becoming a confident number, and
+    both exist because the naive version invented figures nobody said:
+
+    A SCALE MUST HAVE SOMETHING IN FRONT OF IT. `base = current or 1.0` reads
+    a bare scale as one of them, so "bayalis hazaar paanch sau" — 42,500, whose
+    `bayalis` this module openly does not know — came out as ₹1,500. The
+    unknown word ends the previous run, `hazaar` starts a new one with nothing
+    before it, and the `or 1.0` supplies the missing 42.
+
+    SCALES MUST STRICTLY DECREASE. A well-formed number says crore, then lakh,
+    then thousand, then hundred, each at most once. Without that, an ASR
+    stutter on a scale word multiplies: "do hazaar hazaar" was 3,000 and
+    "paanch sau sau" was 50,000. Repetition and disorder are the two shapes a
+    garbled scale takes, and neither is a number worth guessing at.
+    """
     total, current = 0.0, 0.0
     seen, pending_multiplier = False, 1.0
+    last_scale: float = float("inf")
+    last_add: float = float("inf")
 
     for w in words:
         if w in _REPEATERS:            # only meaningful in a digit string
@@ -246,17 +286,29 @@ def _arithmetic(words: list[str]) -> float | None:
         elif w in _QUARTER_LESS:
             pending_multiplier = -0.25
             seen = True
-        elif w in _NUMBER_WORDS:
-            current += _NUMBER_WORDS[w]
-            seen = True
-        elif _DIGITS_ONLY.match(w):
-            current += int(w)
+        elif w in _NUMBER_WORDS or _NUMERIC.match(w):
+            value = _NUMBER_WORDS[w] if w in _NUMBER_WORDS else _numeric(w)
+            band = 10 if value >= 10 else 1
+            if band >= last_add:
+                # The same decreasing rule the scales follow. Only tens-then-
+                # unit composes ("twenty two"); unit-then-unit and
+                # tens-then-tens do not, and reading them as a sum turned the
+                # stutter "do do hazaar" into 4,000 and "twenty twenty" into 40.
+                return None
+            last_add = band
+            current += value
             seen = True
         elif w in _SCALES:
             scale = _SCALES[w]
-            base = current or 1.0
+            if scale >= last_scale:
+                return None            # repeated or out-of-order: not a number
+            last_scale = scale
+            last_add = 100             # a scale starts a fresh group
+            if current == 0.0 and pending_multiplier == 1.0:
+                return None            # a scale with nothing to multiply
+            base = current
             if pending_multiplier != 1.0:
-                base += pending_multiplier
+                base = (base or 1.0) + pending_multiplier
                 pending_multiplier = 1.0
             if scale >= 1_000:
                 total += base * scale
@@ -294,7 +346,7 @@ def normalise(text: str, *, currency_symbol: str = "₹") -> Normalised:
 
     while i < len(tokens):
         token = tokens[i]
-        word = token.lower().rstrip(".") if token.strip() else token
+        word = token.lower() if token.strip() else token
 
         if not token.strip() or not _is_number_token(word):
             out.append(token)
@@ -306,11 +358,11 @@ def normalise(text: str, *, currency_symbol: str = "₹") -> Normalised:
         run_tokens, run_words, j = [], [], i
         while j < len(tokens):
             t = tokens[j]
-            w = t.lower().rstrip(".")
+            w = t.lower()
             if not t.strip():
                 # Whitespace only continues a run if a number follows it.
                 k = j + 1
-                if k < len(tokens) and _is_number_token(tokens[k].lower().rstrip(".")):
+                if k < len(tokens) and _is_number_token(tokens[k].lower()):
                     run_tokens.append(t)
                     j += 1
                     continue
@@ -346,7 +398,7 @@ def _drop_currency_before(out: list[str]) -> None:
     k = len(out) - 1
     while k >= 0 and not out[k].strip():
         k -= 1
-    if k >= 0 and out[k].lower().rstrip(".") in _CURRENCY:
+    if k >= 0 and out[k].lower() in _CURRENCY:
         del out[k:]
 
 
@@ -354,20 +406,32 @@ def _skip_currency_after(tokens: list[str], j: int) -> int:
     k = j
     while k < len(tokens) and not tokens[k].strip():
         k += 1
-    return k + 1 if k < len(tokens) and tokens[k].lower().rstrip(".") in _CURRENCY else j
+    return k + 1 if k < len(tokens) and tokens[k].lower() in _CURRENCY else j
 
 
 def _word_before(out: list[str]) -> str:
+    """The word to the left, looking through an abbreviation's full stop.
+
+    "Rs. 4,500" puts a lone "." between the currency word and the figure now
+    that a period is its own token, and skipping it is what keeps that figure
+    recognised as money. Only one, and only a period: anything else between
+    them means they are not adjacent.
+    """
+    skipped_dot = False
     for token in reversed(out):
-        if token.strip():
-            return token.lower().rstrip(".")
+        if not token.strip():
+            continue
+        if token == "." and not skipped_dot:
+            skipped_dot = True
+            continue
+        return token.lower()
     return ""
 
 
 def _word_after(tokens: list[str], j: int) -> str:
     for token in tokens[j:]:
         if token.strip():
-            return token.lower().rstrip(".")
+            return token.lower()
     return ""
 
 
@@ -379,9 +443,12 @@ def _rewrite(words: list[str], result: Normalised, spoken: str,
 
     # Already digits, nothing spoken to convert. Still worth recording as an
     # amount if a currency word sits beside it, so callers get one list.
-    if all(_DIGITS_ONLY.match(w) for w in words):
-        if before in _CURRENCY or after in _CURRENCY or before == symbol:
-            value = float("".join(words))
+    if all(_NUMERIC.match(w) for w in words):
+        # One figure only. A run of two digit tokens is two numbers that happen
+        # to be adjacent ("640 500"), and concatenating them would invent a
+        # third — which is what `float("".join(...))` used to do.
+        if len(words) == 1 and (before in _CURRENCY or after in _CURRENCY or before == symbol):
+            value = _numeric(words[0])
             result.amounts_inr.append(value)
             result.values.append(value)
         return None
@@ -393,7 +460,7 @@ def _rewrite(words: list[str], result: Normalised, spoken: str,
     # number the tables do not know: "bayalis hazaar" reaches here as just
     # ["hazaar"], and reading it as 1,000 would put a confidently wrong amount
     # into the ledger lookup. Declining leaves it for a person.
-    if not any(w in _NUMBER_WORDS or w in _FIXED_FRACTIONS or _DIGITS_ONLY.match(w)
+    if not any(w in _NUMBER_WORDS or w in _FIXED_FRACTIONS or _NUMERIC.match(w)
                for w in words):
         return None
 
