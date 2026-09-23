@@ -26,10 +26,23 @@ def new_case_id() -> str:
 
 @asynccontextmanager
 async def _session():
+    """A checkpointer session, in WAL mode.
+
+    Each call opens its own connection, and ingest now runs cases concurrently,
+    so several of them write this file at once. SQLite's default rollback
+    journal locks the whole database for a write, and a checkpoint that waits
+    past the busy timeout raises "database is locked" — which the ingest path
+    catches and turns into a delivery-log failure. A bounded-concurrency change
+    would have been manufacturing dead letters under exactly the burst it was
+    added to survive. WAL lets readers and one writer proceed together, and the
+    busy timeout makes a contended write wait rather than fail.
+    """
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
     CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_PATH)) as saver:
+        await saver.conn.execute("PRAGMA journal_mode=WAL")
+        await saver.conn.execute("PRAGMA busy_timeout=5000")
         yield build_graph(checkpointer=saver), saver
 
 

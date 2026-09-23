@@ -15,9 +15,13 @@ because nothing in the pipeline converts words to digits.
 So this module sits between the transcript and everything that reasons about
 it. Three rules govern it:
 
-1.  IT NEVER REWRITES THE RECORD. `normalise` returns a new string for the
-    machinery. What the customer actually said stays in the transcript, because
-    a normaliser that edits the evidence cannot be audited when it is wrong.
+1.  IT NEVER EDITS ITS INPUT. `normalise` returns a new string for the
+    machinery and reports every span it changed, because a normaliser that
+    quietly edits the evidence cannot be audited when it is wrong. That puts an
+    obligation on the caller, not just on this module: `voice/agent.py` does
+    rewrite the transcription frame in place — the model has to read the
+    converted text — so it keeps every (said, passed on) pair alongside it.
+    Whoever mutates is responsible for keeping what they mutated.
 2.  AMBIGUITY IS LEFT ALONE. Hindi number words collide with ordinary English
     ones — `do` is 2 and also "do", `char` is 4 and also "char", `so` is
     neither. Those tokens only count as numbers next to another number or a

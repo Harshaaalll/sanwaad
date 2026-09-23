@@ -161,6 +161,13 @@ async def run_voice_call(
     )
 
     heard_amounts: list[float] = []
+    # Every rewrite the normaliser makes, as (what was said, what was passed
+    # on). This is the record its first rule promises: the module returns a new
+    # string rather than editing its input, but the processor below does edit
+    # the frame, so without keeping the pair here the original would survive
+    # only as a log line — and the evidence needed to audit a wrong conversion
+    # would be the first thing discarded.
+    heard: list[tuple[str, str]] = []
 
     class SpokenNumbers(FrameProcessor):
         """Words to digits, before the transcript reaches the model.
@@ -180,6 +187,7 @@ async def run_voice_call(
                 if found.changed:
                     logger.info(f"[voice:{case_id}] heard {frame.text!r} "
                                 f"→ {found.text!r}")
+                    heard.append((frame.text, found.text))
                     heard_amounts.extend(found.amounts_inr)
                     frame.text = found.text
             await self.push_frame(frame, direction)
@@ -253,6 +261,8 @@ async def run_voice_call(
     used = tracker.used()
     logger.info(f"[voice:{case_id}] {duration:.0f}s, clauses used: {used}, "
                 f"amounts heard: {heard_amounts}")
+    for said, passed_on in heard:
+        logger.info(f"[voice:{case_id}] transcript record: {said!r} -> {passed_on!r}")
 
     return VoiceOutcome(
         happened=True,

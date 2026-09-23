@@ -180,7 +180,11 @@ def stage_stats(traces: list[dict]) -> list[dict]:
         if t.get("over_budget"):
             breaches[name] = breaches.get(name, 0) + 1
         if t.get("latency_budget_ms"):
-            budgets[name] = int(t["latency_budget_ms"])
+            # The widest budget seen for this stage, not the last one written.
+            # `llm.draft` carries 8000ms when it routes to the reasoning tier
+            # and 5000ms otherwise, under one span name, so last-wins reported
+            # breaches against whichever trace happened to come last.
+            budgets[name] = max(budgets.get(name, 0), int(t["latency_budget_ms"]))
 
     rows = []
     for name, ms in by.items():
