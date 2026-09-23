@@ -132,8 +132,32 @@ class CircuitBreaker:
         if st is None:
             return
         if st.opened_at is not None:
-            logger.info(f"circuit closed for {name} after a successful probe")
-        self._states[name] = _State(trips=st.trips)
+            # A probe got an answer: the outage is over, so the slate is clean.
+            logger.info(f"circuit closed for {name}: a probe got an answer")
+            self._states[name] = _State(trips=st.trips)
+            return
+        # Closed, and this is the important case. A success does NOT empty the
+        # failure window. Emptying it turns the whole thing into a consecutive
+        # counter, which is what the policy above says a window exists to avoid:
+        # a dependency dropping one request in five produces a lucky success
+        # often enough that the count never reaches the threshold, and the
+        # circuit stays closed through exactly the outage it was built for.
+        # Failures leave the window by ageing out of it, and by nothing else.
+        st.probing = False
+
+    def abandon(self, name: str) -> None:
+        """Give back a probe we took and never got an answer for.
+
+        A cancelled task — a client disconnecting, a shutdown, an outer
+        timeout — unwinds without an outcome. Without this the probe flag stays
+        set, `state()` reports half-open forever and every later call to that
+        tool is refused for the life of the process: one cancellation and the
+        tool is dead. Handing the probe back is honest, because we learned
+        nothing either way.
+        """
+        st = self._states.get(name)
+        if st is not None:
+            st.probing = False
 
     def record_failure(self, name: str, code: ErrorCode,
                        now: Optional[float] = None) -> None:
@@ -154,7 +178,10 @@ class CircuitBreaker:
         if len(st.failures) >= self.policy.threshold:
             st.opened_at = now
             st.trips += 1
-            st.failures.clear()
+            # The window is NOT cleared here. While open there is nothing to
+            # count (calls are refused), a successful probe wipes the state
+            # anyway, and leaving it means `report()` can say how many failures
+            # tripped this circuit instead of always saying nought.
             logger.warning(
                 f"circuit opened for {name}: {self.policy.threshold} failures in "
                 f"{self.policy.window_s:g}s; failing fast for {self.policy.cooldown_s:g}s")

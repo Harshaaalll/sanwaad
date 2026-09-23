@@ -189,42 +189,61 @@ class ToolRegistry:
 
         last: Optional[ToolError] = None
         attempt = 0
-        for attempt in range(1, max_attempts + 1):
-            try:
-                injected = self._next_fault(name)
-                if injected is not None:
-                    raise ToolFailure(injected.code, injected.message, injected.retryable)
-                raw = await asyncio.wait_for(spec.handler(inp), timeout=spec.timeout_s)
-            except (asyncio.TimeoutError, TimeoutError):
-                last = ToolError(code=ErrorCode.TIMEOUT, retryable=True,
-                                 message=f"no response within {spec.timeout_s}s")
-            except ToolFailure as exc:
-                last = ToolError(code=exc.code, message=exc.message, retryable=exc.retryable)
-            except Exception as exc:
-                # Never forward a raw exception message to an agent: it can
-                # carry internals, and it is not something to branch on.
-                last = ToolError(code=ErrorCode.UPSTREAM, retryable=False,
-                                 message=f"unexpected {type(exc).__name__}")
-            else:
+        reported = False
+        try:
+            for attempt in range(1, max_attempts + 1):
                 try:
-                    payload = raw.model_dump() if isinstance(raw, BaseModel) else raw
-                    out = spec.output_model.model_validate(payload)
-                except ValidationError as exc:
-                    # The backend answered, just not in contract. That is our
-                    # disagreement with it, not evidence that it is down.
-                    self.breaker.record_outcome(name, ErrorCode.INVALID_OUTPUT)
-                    return ToolResult(tool=name, ok=False, attempts=attempt, error=ToolError(
-                        code=ErrorCode.INVALID_OUTPUT, message=_summarise(exc)))
-                self.breaker.record_outcome(name)
-                return ToolResult(tool=name, ok=True, attempts=attempt,
-                                  output=out.model_dump(mode="json"))
-            # Counted per attempt, not per call: three retries against a dead
-            # backend are three dead requests, and the breaker should see the
-            # damage at the rate it is actually being done.
-            self.breaker.record_outcome(name, last.code)
-            if not last.retryable:
-                break
-        return ToolResult(tool=name, ok=False, attempts=attempt, error=last)
+                    injected = self._next_fault(name)
+                    if injected is not None:
+                        raise ToolFailure(injected.code, injected.message, injected.retryable)
+                    raw = await asyncio.wait_for(spec.handler(inp), timeout=spec.timeout_s)
+                except (asyncio.TimeoutError, TimeoutError):
+                    last = ToolError(code=ErrorCode.TIMEOUT, retryable=True,
+                                     message=f"no response within {spec.timeout_s}s")
+                except ToolFailure as exc:
+                    last = ToolError(code=exc.code, message=exc.message, retryable=exc.retryable)
+                except Exception as exc:
+                    # Never forward a raw exception message to an agent: it can
+                    # carry internals, and it is not something to branch on.
+                    last = ToolError(code=ErrorCode.UPSTREAM, retryable=False,
+                                     message=f"unexpected {type(exc).__name__}")
+                else:
+                    try:
+                        payload = raw.model_dump() if isinstance(raw, BaseModel) else raw
+                        out = spec.output_model.model_validate(payload)
+                    except ValidationError as exc:
+                        # The backend answered, just not in contract. That is our
+                        # disagreement with it, not evidence that it is down.
+                        self.breaker.record_outcome(name, ErrorCode.INVALID_OUTPUT)
+                        reported = True
+                        return ToolResult(tool=name, ok=False, attempts=attempt, error=ToolError(
+                            code=ErrorCode.INVALID_OUTPUT, message=_summarise(exc)))
+                    self.breaker.record_outcome(name)
+                    reported = True
+                    return ToolResult(tool=name, ok=True, attempts=attempt,
+                                      output=out.model_dump(mode="json"))
+                # Counted per attempt, not per call: three retries against a dead
+                # backend are three dead requests, and the breaker should see the
+                # damage at the rate it is actually being done.
+                self.breaker.record_outcome(name, last.code)
+                reported = True
+                if not last.retryable:
+                    break
+                # Re-ask before spending another attempt. That failure may have
+                # re-opened the circuit — and if this call was the half-open probe,
+                # its remaining retries would make "exactly one probe" three
+                # requests to a backend we just confirmed is down.
+                if not self.breaker.allows(name):
+                    break
+            return ToolResult(tool=name, ok=False, attempts=attempt, error=last)
+        finally:
+            # A cancelled task unwinds through here without an outcome —
+            # CancelledError is a BaseException, so none of the handlers above
+            # see it. If this call held the half-open probe, leaving the flag
+            # set would refuse every later call to this tool for the life of
+            # the process. Hand the probe back: we learned nothing either way.
+            if not reported:
+                self.breaker.abandon(name)
 
     # --- audit ----------------------------------------------------------------
 

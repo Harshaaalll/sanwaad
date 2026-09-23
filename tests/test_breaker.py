@@ -68,12 +68,42 @@ def test_old_failures_fall_out_of_the_window(breaker):
     assert breaker.state("ledger", now=1000) == CLOSED
 
 
-def test_a_success_clears_what_was_counted(breaker):
-    breaker.record_outcome("ledger", ErrorCode.UPSTREAM, now=100)
-    breaker.record_outcome("ledger", ErrorCode.UPSTREAM, now=101)
-    breaker.record_outcome("ledger", now=102)                 # recovered
+def test_a_lucky_success_does_not_empty_the_window(breaker):
+    """This test used to assert the opposite, and the opposite is a bug.
+
+    Clearing the window on every success makes the breaker a consecutive
+    counter — precisely what `BreakerPolicy`'s own comment says a window exists
+    to avoid. A dependency dropping one request in five produces a lucky
+    success often enough that the count never reaches the threshold, so the
+    circuit stayed closed through exactly the outage it was built for.
+    """
+    for t in range(100, 102):
+        breaker.record_outcome("ledger", ErrorCode.UPSTREAM, now=t)
+    breaker.record_outcome("ledger", now=102)                 # one lucky success
     breaker.record_outcome("ledger", ErrorCode.UPSTREAM, now=103)
-    assert breaker.state("ledger", now=103) == CLOSED
+    assert breaker.state("ledger", now=103) == OPEN
+
+
+def test_a_half_dead_dependency_still_opens_the_circuit():
+    """The shipped policy against the traffic it was written for: a backend
+    dropping about one request in five, which never fails five times in a row."""
+    b = CircuitBreaker()                       # threshold 5, window 60s
+    t = 0.0
+    for i in range(20):
+        b.record_outcome("ledger", ErrorCode.UPSTREAM, now=t)
+        t += 1
+        if i % 4 == 3:
+            b.record_outcome("ledger", now=t)  # the lucky one
+            t += 1
+    assert b.report(now=t)[0]["trips"] >= 1
+
+
+def test_a_healthy_tool_never_trips(breaker):
+    """The other direction: failures age out, so a slow drip that never
+    reaches the threshold inside one window must leave the circuit closed."""
+    for t in range(0, 500, 100):               # one failure every 100s
+        breaker.record_outcome("ledger", ErrorCode.UPSTREAM, now=float(t))
+    assert breaker.state("ledger", now=500.0) == CLOSED
 
 
 def test_one_tool_failing_does_not_stop_another(breaker):
@@ -174,6 +204,49 @@ async def test_a_refused_call_costs_no_attempts(monkeypatch):
         assert refused.attempts == 0
     finally:
         REGISTRY.clear_faults()
+
+
+def test_an_abandoned_probe_is_handed_back(breaker):
+    """A cancelled task unwinds without an outcome. If the probe flag stayed
+    set the tool would be refused for the life of the process — one client
+    disconnect and the ledger is unreachable until a restart."""
+    for _ in range(3):
+        breaker.record_outcome("ledger", ErrorCode.UPSTREAM, now=100)
+    assert breaker.allows("ledger", now=131) is True     # probe taken
+    assert breaker.allows("ledger", now=131) is False    # nobody else may
+    breaker.abandon("ledger")
+    assert breaker.allows("ledger", now=131) is True     # available again
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_call_does_not_strand_the_probe(monkeypatch):
+    """The same thing through the registry, where the cancellation happens."""
+    import asyncio
+
+    breaker = CircuitBreaker(BreakerPolicy(threshold=1, window_s=60, cooldown_s=0))
+    monkeypatch.setattr(REGISTRY, "breaker", breaker)
+    breaker.record_outcome("lookup_transaction", ErrorCode.UPSTREAM)
+
+    async def _hang(_inp):
+        await asyncio.sleep(3600)
+
+    # ToolSpec is frozen, so swap in a copy that hangs, under the same name —
+    # the name is what the agent's contract is checked against.
+    import dataclasses
+
+    spec = REGISTRY.get("lookup_transaction")
+    monkeypatch.setitem(REGISTRY._tools, "lookup_transaction",
+                        dataclasses.replace(spec, handler=_hang))
+
+    task = asyncio.create_task(
+        REGISTRY.call("lookup_transaction", {"handle": "u/karthik_rn"}, agent="plan"))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # The probe was handed back, so the next caller may take one.
+    assert breaker.allows("lookup_transaction") is True
 
 
 @pytest.mark.asyncio
