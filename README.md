@@ -314,7 +314,7 @@ tests/            221 tests
 | 2026-09-15 | `1a3af80` | Sanwaad as a standalone repo: the four agents (listener, pattern, judge, ghostwriter), the LangGraph case graph, hybrid RAG over the policy index, typed tools with human-approved money actions, trace-level evals, and DESIGN.md Part I (12 lessons) |
 | 2026-09-16 | `8fb9400` | Loop engineering: the support agent loop (kernel, stopping conditions, context window, verifiers, policy sub-agent), the MINT ladder, the three nested loops, a 13-scenario loop eval, and DESIGN.md Part II (8 lessons) |
 | 2026-09-21 | `4123af7` | Input-side harness for the voice leg: a spoken-number normaliser (English, Hinglish, Devanagari; Indian scales; declines what it cannot read confidently) and per-call ASR hotwords derived from the complaint and its clauses, with nothing identifying sent |
-| 2026-09-23 | `TBD` | Deployable: a Dockerfile that bakes the embedding model and the policy index at build time, and split liveness/readiness probes — `/ready` returns 503 while the index is warming or failed, so an orchestrator can tell "coming up" from "broken" |
+| 2026-09-23 | `f8b5a99` | Deployable: a Dockerfile that bakes the embedding model and the policy index at build time, and split liveness/readiness probes — `/ready` returns 503 while the index is warming or failed, so an orchestrator can tell "coming up" from "broken" |
 
 `git log --oneline` for the full history. The repo starts from a clean commit:
 earlier exploratory work on speech-to-speech voice agents lives in a separate
