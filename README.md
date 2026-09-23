@@ -173,11 +173,13 @@ _Mode: offline, deterministic stubs, no API key_
 | Tool-call success rate (outages injected) | 0.973 |
 | Invalid schema rate | n/a |
 | Mean cost per case (₹) | 0 |
-| Case latency p50 / p95 (ms) | 1349.8 / 1911.6 |
+| Case latency p50 / p95 (ms) | 1349.8 / 1911.6 *(this machine)* |
 
 Offline, the model calls are deterministic stand-ins, so this table tests the
 system *around* the models: routing, validation, approvals, degradation and the
-safety invariants. It says nothing about model quality. The same eval runs
+safety invariants. It says nothing about model quality. Every row reproduces
+exactly on a rerun except the latency, which is whatever the machine that ran
+it could do — a number worth measuring per run, not worth quoting from a README. The same eval runs
 unchanged against Gemini once `GOOGLE_API_KEY` is in `.env`; regenerate this
 table with `python -m sanwaad.evals.trajectory --markdown`.
 
@@ -243,7 +245,7 @@ python -m sanwaad.router                   # which model runs each step
 python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
-pytest tests/ -q                           # 284 tests, no API key
+pytest tests/ -q                           # 286 tests, no API key
 ```
 
 Or in Docker, where that download already happened at build time:
@@ -307,7 +309,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            284 tests
+tests/            286 tests
 ```
 
 ---

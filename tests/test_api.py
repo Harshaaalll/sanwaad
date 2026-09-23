@@ -96,6 +96,22 @@ def test_an_open_circuit_is_reported_but_does_not_refuse_traffic(client):
         server.REGISTRY.breaker = saved
 
 
+def test_ready_keeps_the_shape_the_console_health_strip_reads(client):
+    """The console renders operational state straight off /ready. Renaming a
+    field here would empty the strip silently — the page would still load, and
+    the one thing it exists to show would just be missing."""
+    body = client.get("/ready").json()
+    assert {"ready", "index", "clauses", "models", "concurrency"} <= set(body)
+    for pool in body["concurrency"]:
+        assert {"pool", "limit", "running", "peak_running", "refused"} <= set(pool)
+
+
+def test_the_dead_letter_endpoint_returns_both_queues(client):
+    body = client.get("/api/delivery").json()
+    assert set(body) == {"dead", "retrying"}
+    assert isinstance(body["dead"], list)
+
+
 @pytest.mark.asyncio
 async def test_warming_records_a_failure_instead_of_crashing_startup(monkeypatch):
     """If the index cannot be built, the process must come up and say so. A

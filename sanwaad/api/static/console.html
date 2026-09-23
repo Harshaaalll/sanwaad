@@ -54,6 +54,13 @@
   .action:first-of-type { border-top:0; }
   .checks { font-size:12px; line-height:1.55; opacity:.9; }
   .approve { display:block; margin-top:8px; font-size:13px; }
+  /* The health strip. Everything the system degrades around — a tool that is
+     failing, a queue that is full, an item that gave up — is invisible in a
+     case list, because a case list only shows what worked. */
+  #health { margin-left:auto; display:flex; gap:6px; align-items:center; }
+  #health .pill { margin:0; cursor:default; }
+  #health .pill.bad { color:var(--bad); border-color:var(--bad); }
+  #health .pill.warn { color:var(--warn); border-color:var(--warn); }
 </style>
 </head>
 <body>
@@ -62,6 +69,7 @@
   <button onclick="ingest()">Ingest mock feed</button>
   <button onclick="load()">Refresh</button>
   <span id="status" class="muted"></span>
+  <span id="health"></span>
 </header>
 
 <div class="wrap">
@@ -84,7 +92,34 @@ async function ingest() {
   load();
 }
 
+async function health() {
+  // /ready answers 503 while the index is warming, so the fetch must not
+  // throw the strip away when the answer is the interesting one.
+  let r;
+  try { r = await (await fetch("/ready")).json(); } catch { return; }
+  const dl = await (await fetch("/api/delivery")).json().catch(() => ({dead: []}));
+  const pills = [];
+  pills.push(r.ready
+    ? `<span class="pill ok">index ${r.clauses}</span>`
+    : `<span class="pill bad">index ${esc(r.index)}</span>`);
+  pills.push(`<span class="pill">models ${esc(r.models)}</span>`);
+  for (const p of r.concurrency || []) {
+    const full = p.running >= p.limit;
+    pills.push(`<span class="pill ${full ? 'warn' : ''}" title="peak ${p.peak_running}, refused ${p.refused}"
+      >${esc(p.pool)} ${p.running}/${p.limit}</span>`);
+  }
+  for (const c of r.circuits || []) {
+    pills.push(`<span class="pill bad" title="${c.trips} trips">${esc(c.tool)} ${esc(c.state)}</span>`);
+  }
+  if ((dl.dead || []).length) {
+    pills.push(`<span class="pill bad" title="python -m sanwaad.delivery"
+      >${dl.dead.length} dead-lettered</span>`);
+  }
+  document.getElementById("health").innerHTML = pills.join("");
+}
+
 async function load() {
+  health();
   const d = await (await fetch("/api/cases")).json();
   cases = d.cases;
   document.getElementById("list").innerHTML = cases.map(c => {

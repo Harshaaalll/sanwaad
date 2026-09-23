@@ -11,6 +11,7 @@ import os
 import sys
 import time
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
@@ -133,6 +134,16 @@ async def ready():
     # is too late to act on.
     state["concurrency"] = pool_report()
     return JSONResponse(state, status_code=200 if state["ready"] else 503)
+
+
+@app.get("/api/delivery")
+async def api_delivery():
+    """The dead-letter queue, for the console.
+
+    Excerpts were redacted when they were written, so this is safe to render.
+    """
+    return {"dead": [asdict(f) for f in DELIVERY.dead()],
+            "retrying": [asdict(f) for f in DELIVERY.retrying()]}
 
 
 # ---------------------------------------------------------------------------
