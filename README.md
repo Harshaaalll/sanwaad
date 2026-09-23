@@ -320,7 +320,7 @@ tests/            268 tests
 | 2026-09-23 | `f8b5a99` | Deployable: a Dockerfile that bakes the embedding model and the policy index at build time, and split liveness/readiness probes — `/ready` returns 503 while the index is warming or failed, so an orchestrator can tell "coming up" from "broken" |
 | 2026-09-23 | `551ef8c` | A floor under retrying: items that fail three times are dead-lettered with their errors and the customer's words instead of being refetched forever, with `--requeue` to put one back after a fix |
 | 2026-09-23 | `2314057` | Latency budgets that something reads: every route declares `max_latency_ms`, the model layer records a breach without aborting the step, and `stage_stats` compares each step's p95 against it via a new `python -m sanwaad.obs` |
-| 2026-09-23 | `TBD4` | A circuit breaker per tool: five timeouts or upstream errors in a minute and calls fail fast instead of each case re-discovering the outage, with a single half-open probe to recover unattended |
+| 2026-09-23 | `e4c15e2` | A circuit breaker per tool: five timeouts or upstream errors in a minute and calls fail fast instead of each case re-discovering the outage, with a single half-open probe to recover unattended |
 
 `git log --oneline` for the full history. The repo starts from a clean commit:
 earlier exploratory work on speech-to-speech voice agents lives in a separate
