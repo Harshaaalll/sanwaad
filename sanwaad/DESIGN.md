@@ -749,6 +749,7 @@ span or audit record is written, not afterwards.
 | A dead dependency is stopped calling | `tools/breaker.py` | `test_the_registry_stops_calling_a_dead_tool` |
 | Bounded concurrency under a burst | `limits.py` | `test_a_burst_runs_at_the_limit_not_all_at_once` |
 | A ceiling on cost per case | `config.MAX_CASE_COST_INR` | `test_a_spent_case_does_not_call_the_model_at_all` |
+| Autonomy earned and revocable | `autonomy.py` | `test_authority_contracts_when_agreement_drops` |
 
 ---
 
@@ -1230,6 +1231,76 @@ They're the building blocks of the loop you just engineered.
 - Take the harness and system-level evaluation as seriously as the model.
 - Put cheap verifiers inside the loop, and people where verification is expensive.
 - Build up from a minimal end-to-end system, one measured layer at a time.
+
+---
+
+## Lesson 21 — Autonomy is earned, not configured
+
+**The idea.** The ambition for a multi-agent system is that it runs itself:
+agents hand work to each other, decide in real time, improve as they go, and a
+person is not in the loop. The trap is building that by *removing* the person,
+because an agent's first day and its thousandth look identical from the inside
+and only one of them has a track record. "Is this safe to automate?" is not a
+question you answer once at design time. It is a measurement, per capability,
+that changes every week.
+
+So autonomy becomes a property the system earns and can lose:
+
+| Level | What it means |
+|---|---|
+| `SHADOW` | it decides and records; a person does the work |
+| `ASSISTED` | a person approves before it acts |
+| `SUPERVISED` | it acts, tells a person, stays reversible |
+| `AUTONOMOUS` | it acts and reports in aggregate |
+
+**In Sanwaad.** `autonomy.py` keeps a ledger per capability — `reply.billing`,
+`reply.refund`, one per thing the system does — and derives a level from
+agreement over a recent window. It climbs on evidence and falls on the loss of
+it, which gives the system something a fixed policy cannot have: **the day a
+model, a prompt or a policy clause changes, agreement drops and authority
+contracts on its own**, before anyone has noticed the regression. That is why
+most of the tests are about falling rather than climbing.
+
+The ledger is fed by work that was already happening. Every human review
+produces the pair this needs — what the system proposed, and what the person
+actually sent. Approving unchanged is agreement; editing or rejecting is not.
+Nothing extra is asked of the reviewer, which is the only version of this that
+is still being fed in month two.
+
+**Two limits, and neither is for sale.**
+
+- Severity above 3 is always a person's call, whatever the record says.
+- A capability is capped by its tools. A `WRITE_HIGH` tool that is not
+  `auto_approvable` needs a human *by contract* — that is `initiate_reversal`,
+  which is money. This reuses the distinction `tools/contracts.py` already
+  makes rather than inventing a second, less-tested one beside it.
+
+The reasoning behind the second one is the whole argument of Part I: a track
+record is evidence about the **common** case, and an irreversible transfer of
+someone else's money is not the case you want to be average about. A system
+that is 99% right about refunds is a system that is wrong about somebody's rent
+once a quarter.
+
+**Try it.** `python -m sanwaad.autonomy` shows every capability and what it has
+earned. Run the demo a few times and watch `reply.refund` climb.
+
+<details><summary><b>Check yourself:</b> Why is the ledger pruned at 90 days, when more evidence would make the estimate better?</summary>
+
+Because authority should rest on a *recent* record. A spotless quarter from
+before a model upgrade is not evidence about the model running today, so
+evidence ageing out is the mechanism rather than a side effect —
+`test_evidence_goes_stale` pins it. It is also the one store in `MEMORY_MAP`
+whose retention changes what the system is allowed to do.
+</details>
+
+<details><summary><b>Check yourself:</b> An operator wants the system fully autonomous tomorrow. What do you tell them?</summary>
+
+That they can have it for the capabilities that have earned it, today, and
+that `SANWAAD_AUTONOMY=off` is there for the opposite request. What they cannot
+have is autonomy on a capability with no track record, because the thing they
+actually want is not "no human" — it is "no human *and* it keeps working", and
+only one of those is purchasable in advance.
+</details>
 
 ---
 
