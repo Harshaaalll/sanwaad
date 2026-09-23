@@ -21,7 +21,7 @@ from typing import Callable, Iterator, Optional
 
 @contextmanager
 def isolated(root: Optional[Path] = None) -> Iterator[Path]:
-    from .. import delivery, feedback, obs, pattern, pipeline
+    from .. import autonomy, delivery, feedback, obs, pattern, pipeline
     from ..caching import TRIAGE_CACHE
     from ..connectors import get_connector
     from ..tools import REGISTRY
@@ -42,6 +42,7 @@ def isolated(root: Optional[Path] = None) -> Iterator[Path]:
         "feedback": feedback.FEEDBACK_PATH,
         "replies": mock._replies_path,
         "delivery": delivery.DELIVERY.path,
+        "autonomy": autonomy.LEDGER.path,
         "cache": dict(TRIAGE_CACHE._store),
     }
     try:
@@ -53,6 +54,7 @@ def isolated(root: Optional[Path] = None) -> Iterator[Path]:
         feedback.FEEDBACK_PATH = base / "feedback.jsonl"
         mock._replies_path = base / "replies.json"
         delivery.DELIVERY.path = base / "delivery_failures.json"
+        autonomy.LEDGER.path = base / "autonomy.jsonl"
         TRIAGE_CACHE._store.clear()
         REGISTRY.clear_faults()
         yield base
@@ -65,6 +67,7 @@ def isolated(root: Optional[Path] = None) -> Iterator[Path]:
         feedback.FEEDBACK_PATH = saved["feedback"]
         mock._replies_path = saved["replies"]
         delivery.DELIVERY.path = saved["delivery"]
+        autonomy.LEDGER.path = saved["autonomy"]
         TRIAGE_CACHE._store.clear()
         TRIAGE_CACHE._store.update(saved["cache"])
         REGISTRY.clear_faults()

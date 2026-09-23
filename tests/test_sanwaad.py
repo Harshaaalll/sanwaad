@@ -95,11 +95,35 @@ def test_never_auto_posts_an_ungrounded_claim():
     assert not allowed and "unsupported" in reason
 
 
-def test_never_auto_posts_above_the_severity_ceiling():
-    allowed, _ = auto_post_allowed(
+def test_never_auto_posts_above_the_severity_ceiling_without_a_track_record():
+    """Above the fixed ceiling a reply is a person's call until the capability
+    has earned otherwise — and with no ledger there is nothing earned."""
+    allowed, reason = auto_post_allowed(
         _state(triage={"severity": REVIEW.auto_post_max_severity + 1})
     )
     assert not allowed
+    assert "has not earned it" in reason
+
+
+def test_high_severity_is_never_autonomous_however_good_the_record(tmp_path, monkeypatch):
+    """Autonomy widens the ordinary case. It does not reach the cases where
+    being wrong is expensive, and no amount of agreement moves that line."""
+    from datetime import datetime, timedelta, timezone
+
+    import sanwaad.autonomy as autonomy_mod
+    from sanwaad.graph.nodes import AUTONOMY_MAX_SEVERITY
+
+    ledger = autonomy_mod.AutonomyLedger(path=tmp_path / "autonomy.jsonl")
+    monkeypatch.setattr(autonomy_mod, "LEDGER", ledger)
+    now = datetime.now(timezone.utc)
+    for i in range(200):                       # a spotless record
+        ledger.record("reply.billing", agreed=True, at=now - timedelta(hours=i))
+
+    allowed, reason = auto_post_allowed(
+        _state(triage={"severity": AUTONOMY_MAX_SEVERITY + 1, "category": "billing"})
+    )
+    assert not allowed
+    assert "whatever the track record says" in reason
 
 
 # --- Consistency receipt ---------------------------------------------------

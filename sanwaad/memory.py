@@ -86,6 +86,16 @@ MEMORY_MAP: list[MemoryTier] = [
         "Ids only",
         "Forgetting this means replying twice in public."),
     MemoryTier(
+        "Autonomy ledger", "learned policy", "JSONL",
+        ("sanwaad.autonomy", "AUTONOMY_PATH"),
+        "Every decision a capability made, and whether the person agreed",
+        90, True,
+        "Never — it decides who may act, it is not something a model reads",
+        "Case ids only; no customer text",
+        "This is the one store that changes what the system is allowed to do. "
+        "It is pruned at 90 days on purpose: authority should rest on a recent "
+        "record, so evidence ageing out is the mechanism, not a side effect."),
+    MemoryTier(
         "Delivery failures", "operational", "JSON file, bounded to 500 records",
         ("sanwaad.delivery", "DELIVERY_PATH"),
         "Items that could not be handled: attempts, the errors, the customer's words",

@@ -25,6 +25,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from sanwaad.autonomy import LEDGER as AUTONOMY  # noqa: E402
 from sanwaad.connectors import get_connector  # noqa: E402
 from sanwaad.delivery import DEAD, DELIVERY  # noqa: E402
 from sanwaad.limits import CALLS, CASES  # noqa: E402
@@ -155,6 +156,10 @@ async def ready():
     # something reports the queue. By the time the only signal is latency, it
     # is too late to act on.
     state["concurrency"] = pool_report()
+    # What the system may currently do without anyone: the number an operator
+    # actually wants when they ask "is this thing running itself yet".
+    earned = [r for r in AUTONOMY.report() if r["level"] in ("SUPERVISED", "AUTONOMOUS")]
+    state["autonomous_capabilities"] = earned
     return JSONResponse(state, status_code=200 if state["ready"] else 503)
 
 

@@ -848,13 +848,74 @@ def auto_post_allowed(state: GrievanceState) -> tuple[bool, str]:
         return False, f"guardrail block: {[g['rule'] for g in blocking]}"
     if REVIEW.forbid_auto_compensation and draft.get("promises_compensation"):
         return False, "draft commits money; clause RFD-05 requires approval"
-    if triage["severity"] > REVIEW.auto_post_max_severity:
-        return False, f"severity {triage['severity']} above auto-post ceiling {REVIEW.auto_post_max_severity}"
     if REVIEW.require_grounded and not grounding.get("grounded"):
         return False, "draft contains unsupported claims"
     if triage.get("needs_private_data"):
         return False, "resolution needs account data not available publicly"
-    return True, "low severity, fully grounded, commits nothing"
+
+    # Everything above is a hard rule: a safety invariant that no track record
+    # buys its way past. What is left is the ordinary case, and how much of it
+    # the system may handle alone is earned rather than fixed.
+    if triage["severity"] <= REVIEW.auto_post_max_severity:
+        return True, "low severity, fully grounded, commits nothing"
+    if triage["severity"] > AUTONOMY_MAX_SEVERITY:
+        return False, (f"severity {triage['severity']} is above {AUTONOMY_MAX_SEVERITY}, "
+                       f"where a person decides whatever the track record says")
+
+    category = triage.get("category", "general")
+    verdict = autonomy_for(f"reply.{category}")
+    if verdict.acts_without_a_person:
+        return True, (f"severity {triage['severity']}: reply.{category} is "
+                      f"{verdict.level.name.lower()} — {verdict.reason}")
+    return False, (f"severity {triage['severity']} above the fixed ceiling "
+                   f"{REVIEW.auto_post_max_severity}, and reply.{category} "
+                   f"has not earned it: {verdict.reason}")
+
+
+# Severity above this is always a person's call. Autonomy widens what the
+# system may handle on its own; it does not reach the cases where being wrong
+# is expensive, and no amount of agreement moves this line.
+AUTONOMY_MAX_SEVERITY = 3
+
+# Which tools a public reply can reach. `post_reply` is auto_approvable, so
+# this capability can climb all the way; anything touching `initiate_reversal`
+# is capped at ASSISTED by `ceiling_for`, which is how money stays with people.
+_REPLY_TOOLS = ("post_reply",)
+
+
+def autonomy_for(capability: str):
+    """What this capability has earned, capped by what its tools allow."""
+    from ..autonomy import LEDGER, ceiling_for
+
+    return LEDGER.verdict(capability, ceiling=ceiling_for(_REPLY_TOOLS))
+
+
+def _record_autonomy(state: GrievanceState, review) -> None:
+    """Feed the ledger from a decision a person was making anyway.
+
+    Approving unchanged is agreement. Editing or rejecting is not — the system
+    proposed something a person would not send. Nothing extra is asked of the
+    reviewer, which is the only way a scheme like this is still being fed in
+    month two.
+    """
+    from ..autonomy import LEDGER
+
+    unchanged = (review.final_text or "").strip() == (state["draft"]["text"] or "").strip()
+    agreed = review.decision == "approve" and unchanged
+    try:
+        LEDGER.record(
+            f"reply.{state['triage']['category']}",
+            agreed=agreed,
+            # A reply that went out and had to be corrected is the expensive
+            # kind of wrong: it was public.
+            consequential=review.decision == "reject",
+            case_id=state["case_id"],
+            note=review.note or ("edited" if not unchanged else review.decision),
+        )
+    except Exception as exc:      # bookkeeping must never fail a review
+        from loguru import logger
+
+        logger.warning(f"autonomy record failed for {state['case_id']}: {exc}")
 
 
 async def review_gate_node(state: GrievanceState) -> dict:
@@ -905,6 +966,8 @@ async def review_gate_node(state: GrievanceState) -> dict:
         from loguru import logger
 
         logger.warning(f"feedback capture failed for {state['case_id']}: {exc}")
+
+    _record_autonomy(state, review)
 
     return {
         "review": review.model_dump(mode="json"),
