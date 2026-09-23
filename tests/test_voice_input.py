@@ -123,6 +123,40 @@ def test_a_grouped_figure_is_read_as_one_number():
     assert normalise("I paid 1,20,000 rupees").amounts_inr == [120_000]
 
 
+@pytest.mark.parametrize("said", [
+    "4500, teen sau rupaye extra",       # a list comma, not a grouping one
+    "Refund 4500, teen baar try kiya",
+    "Rs 4,5 lakh",                       # neither 45 lakh nor 4.5 lakh: ambiguous
+    "The amounts were 500, 300 and 200",
+])
+def test_a_punctuation_comma_is_not_a_grouping_comma(said):
+    """The fix for grouped figures accepted a comma anywhere in a number, so
+    "4500, teen sau rupaye" fused across the clause and reported ₹450,300 from
+    a customer who said four and a half thousand. Grouping is only grouping
+    where a grouped figure puts it; a comma between two figures is ambiguous
+    and left alone."""
+    found = normalise(said)
+    assert found.text == said
+    assert 450_300 not in found.values
+
+
+@pytest.mark.parametrize("said,never", [
+    ("Maine diye 500 rupees. Teen sau baar bola.", 300),
+    ("Unhone bola milenge nahi rupaye. Do hazaar log pareshan hain.", 2000),
+])
+def test_a_currency_word_does_not_reach_across_a_full_stop(said, never):
+    """Skipping a period let "Rs. 4,500" be read as money, and also made a
+    sentence *ending* in a currency word tag the next sentence's first number:
+    "teen sau baar" is three hundred times, not ₹300. Only an abbreviation
+    keeps a figure attached across a stop."""
+    assert never not in normalise(said).amounts_inr
+
+
+def test_an_abbreviated_currency_still_reaches_across_its_own_full_stop():
+    """The case the skip exists for has to keep working."""
+    assert normalise("Rs. 4,500 debited").amounts_inr == [4500]
+
+
 def test_normalising_twice_gives_the_same_answer():
     """The module renders amounts with grouping, so its own output has to be
     readable to it. It was not: a second pass turned ₹4,500 into ₹4. The voice

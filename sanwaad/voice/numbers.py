@@ -139,6 +139,11 @@ _CURRENCY = {
 # 2000 while "do you have" keeps its verb.
 _AMBIGUOUS = {"do", "char", "sat"}
 
+# Currency words conventionally written with a full stop. Only these keep a
+# figure attached across a period; the rest are whole words, and a period after
+# a whole word ends a sentence.
+_ABBREVIATED_CURRENCY = {"rs", "inr"}
+
 
 def _canon(word: str) -> str:
     """Devanagari has two spellings for the same letter — "ज़" is either one
@@ -172,8 +177,16 @@ _NUMBER_WORDS = {**_UNITS, **_TEENS, **_TENS}
 # "refund of 640. Two orders" became "refund of 642 orders": the period was
 # stripped for the lookup, so the run continued across the sentence boundary,
 # ate the next sentence's first word and invented 642.
-_TOKEN = re.compile(r"[₹]|\d[\d,]*(?:\.\d+)?|[\wऀ-ॿ]+|\s+|[^\s\w]", re.UNICODE)
-_NUMERIC = re.compile(r"^\d[\d,]*(?:\.\d+)?$")
+# A comma is a grouping separator only where a grouped figure actually puts
+# one. `\d[\d,]*` accepted a comma anywhere, so the punctuation comma in
+# "4500, teen sau rupaye" was swallowed into the number, the run carried on
+# across the clause and ₹450,300 came out of a customer who said four and a
+# half thousand — the same class of bug as the sentence-ending period below,
+# reintroduced by the fix for it. Only Indian (1,20,000) and western (4,500)
+# grouping counts; "4500," and "4,5" are a number followed by punctuation.
+_GROUPED = r"\d{1,2}(?:,\d{2})*,\d{3}|\d{1,3}(?:,\d{3})+|\d+"
+_TOKEN = re.compile(rf"[₹]|(?:{_GROUPED})(?:\.\d+)?|[\wऀ-ॿ]+|\s+|[^\s\w]", re.UNICODE)
+_NUMERIC = re.compile(rf"^(?:{_GROUPED})(?:\.\d+)?$")
 
 
 def _numeric(token: str) -> float:
@@ -378,6 +391,14 @@ def normalise(text: str, *, currency_symbol: str = "₹") -> Normalised:
             j += 1
 
         spoken = "".join(run_tokens)
+        if _comma_between_figures(out):
+            # A comma directly between two figures is not grouping and not a
+            # list either — "Rs 4,5 lakh" could be 4.5 lakh or two numbers, and
+            # rewriting one half of it renders text that reads as a third
+            # figure entirely. Ambiguity is left alone, which is the rule.
+            out.append(spoken)
+            i = j
+            continue
         amounts_before = len(result.amounts_inr)
         rewritten = _rewrite(run_words, result, spoken, currency_symbol,
                              before=_word_before(out), after=_word_after(tokens, j))
@@ -396,6 +417,21 @@ def normalise(text: str, *, currency_symbol: str = "₹") -> Normalised:
 
     result.text = "".join(out)
     return result
+
+
+def _comma_between_figures(out: list[str]) -> bool:
+    """Is the run about to start sitting right after `<digits> ,`?"""
+    seen_comma = False
+    for token in reversed(out):
+        if not token.strip():
+            continue
+        if not seen_comma:
+            if token != ",":
+                return False
+            seen_comma = True
+            continue
+        return bool(_NUMERIC.match(token))
+    return False
 
 
 def _drop_currency_before(out: list[str]) -> None:
@@ -421,14 +457,21 @@ def _word_before(out: list[str]) -> str:
     recognised as money. Only one, and only a period: anything else between
     them means they are not adjacent.
     """
-    skipped_dot = False
+    pending_dot = False
     for token in reversed(out):
         if not token.strip():
             continue
-        if token == "." and not skipped_dot:
-            skipped_dot = True
+        if token == "." and not pending_dot:
+            pending_dot = True
             continue
-        return token.lower()
+        word = token.lower()
+        if pending_dot:
+            # Only an abbreviation keeps the figure attached to it. "Rs." is
+            # one; "rupees." is a sentence ending, and treating it as adjacency
+            # made the next sentence's first number an amount — "500 rupees.
+            # Teen sau baar bola" reported ₹300 for "three hundred times".
+            return word if word in _ABBREVIATED_CURRENCY else ""
+        return word
     return ""
 
 
@@ -451,7 +494,8 @@ def _rewrite(words: list[str], result: Normalised, spoken: str,
         # One figure only. A run of two digit tokens is two numbers that happen
         # to be adjacent ("640 500"), and concatenating them would invent a
         # third — which is what `float("".join(...))` used to do.
-        if len(words) == 1 and (before in _CURRENCY or after in _CURRENCY or before == symbol):
+        if (len(words) == 1 and after != ","
+                and (before in _CURRENCY or after in _CURRENCY or before == symbol)):
             value = _numeric(words[0])
             result.amounts_inr.append(value)
             result.values.append(value)
