@@ -585,6 +585,20 @@ successful task.
 - **Cost per case** is rolled up in `closure.total_cost_inr`, and the eval
   reports `cost_per_successful_task_inr`. `closure.llm_calls` counts attempts,
   so a retry and a fallback show up as three calls.
+- **A ceiling on what one case may cost.** The support loop has had a budget
+  since it was written, because a loop can iterate freely and something must
+  stop it. The case graph never did — its shape bounds its own length, and
+  "nothing can run away" was quietly taken to mean "no ceiling is needed".
+  Those are different claims. `MAX_CASE_COST_INR` is a policy statement: past
+  this spend, a person handling one case is cheaper than the model continuing
+  to try, and a case that has cost this much is one something unusual has
+  happened to. It is checked *before* each model call, because spending the
+  money and then reporting that you were not allowed to is an audit trail, not
+  a budget. Going over degrades exactly the way an outage does — the step takes
+  its safe default, is marked degraded, and the grounding gate sends the case
+  to a person — so a breach reuses a path every downstream branch already
+  understands instead of inventing one that none of them do.
+
 - **A latency budget per step, which something actually reads.** Each route
   carries `max_latency_ms` alongside `timeout_s`, and the two do different
   jobs: the timeout is when to give up, the budget is what good looks like. A
@@ -734,6 +748,7 @@ span or audit record is written, not afterwards.
 | Nothing retried forever | `delivery.py`, `listener.watch` | `test_a_poisoned_item_stops_being_refetched` |
 | A dead dependency is stopped calling | `tools/breaker.py` | `test_the_registry_stops_calling_a_dead_tool` |
 | Bounded concurrency under a burst | `limits.py` | `test_a_burst_runs_at_the_limit_not_all_at_once` |
+| A ceiling on cost per case | `config.MAX_CASE_COST_INR` | `test_a_spent_case_does_not_call_the_model_at_all` |
 
 ---
 

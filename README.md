@@ -243,7 +243,7 @@ python -m sanwaad.router                   # which model runs each step
 python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
-pytest tests/ -q                           # 277 tests, no API key
+pytest tests/ -q                           # 284 tests, no API key
 ```
 
 Or in Docker, where that download already happened at build time:
@@ -307,7 +307,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            277 tests
+tests/            284 tests
 ```
 
 ---

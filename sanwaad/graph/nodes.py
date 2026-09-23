@@ -9,7 +9,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from ..caching import TRIAGE_CACHE
-from ..config import JUDGE, REVIEW
+from ..config import JUDGE, MAX_CASE_COST_INR, REVIEW
 from ..context import minimal_text, untrusted, with_trust_rules
 from ..guardrails import check_complaint, check_reply
 from ..llm import NON_CALL_MODELS, format_citations, structured
@@ -97,6 +97,8 @@ async def triage_node(state: GrievanceState) -> dict:
                 max_output_tokens=r.max_output_tokens,
                 timeout_s=r.timeout_s,
                 max_latency_ms=r.max_latency_ms,
+                spent_inr=_spent(state),
+                budget_inr=MAX_CASE_COST_INR,
                 trace_id=state["case_id"],
             )
             TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"), namespace="triage")
@@ -325,6 +327,8 @@ async def judge_node(state: GrievanceState) -> dict:
             max_output_tokens=r.max_output_tokens,
             timeout_s=r.timeout_s,
             max_latency_ms=r.max_latency_ms,
+            spent_inr=_spent(state),
+            budget_inr=MAX_CASE_COST_INR,
             trace_id=state["case_id"],
             offline_fallback={"author_class": verdict.author_class,
                               "authenticity": verdict.authenticity,
@@ -549,6 +553,8 @@ Governing clauses (trusted policy):
         max_output_tokens=r.max_output_tokens,
         timeout_s=r.timeout_s,
         max_latency_ms=r.max_latency_ms,
+        spent_inr=_spent(state),
+        budget_inr=MAX_CASE_COST_INR,
         trace_id=state["case_id"],
         offline_fallback={
             "text": (
@@ -625,6 +631,8 @@ async def ground_check_node(state: GrievanceState) -> dict:
         max_output_tokens=r.max_output_tokens,
         timeout_s=r.timeout_s,
         max_latency_ms=r.max_latency_ms,
+        spent_inr=_spent(state),
+        budget_inr=MAX_CASE_COST_INR,
         trace_id=state["case_id"],
         offline_fallback={"grounded": True, "unsupported_claims": [],
                           "reasoning": "offline mode: not verified"},
@@ -762,6 +770,8 @@ async def plan_node(state: GrievanceState) -> dict:
         max_output_tokens=r.max_output_tokens,
         timeout_s=r.timeout_s,
         max_latency_ms=r.max_latency_ms,
+        spent_inr=_spent(state),
+        budget_inr=MAX_CASE_COST_INR,
         trace_id=case_id,
     )
 
@@ -1069,6 +1079,18 @@ def _rupee_amounts(text: str) -> list[float]:
         except ValueError:
             continue
     return sorted(set(values))
+
+
+def _spent(state: GrievanceState) -> float:
+    """What this case has cost in models so far.
+
+    Read from the accumulated cost entries rather than tracked separately, so
+    the ceiling is enforced against the same number the closure reports. Two
+    counters would eventually disagree, and the one the ceiling used would be
+    the one nobody was looking at.
+    """
+    return sum(float(c.get("inr", 0) or 0) for c in state.get("costs") or [])
+
 
 
 def _largest_rupee_amount(text: str) -> Optional[float]:

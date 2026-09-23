@@ -45,6 +45,24 @@ _client = None
 NON_CALL_MODELS = frozenset({"", "offline", "rules", "cache", "none"})
 
 
+class BudgetExceeded(RuntimeError):
+    """This case has spent its ceiling, and this step has no safe default.
+
+    Distinct from ModelCallError on purpose. Both stop the same way, but they
+    mean opposite things to whoever reads the log: one says a provider is down
+    and the case was unlucky, the other says the case is expensive and someone
+    should look at why. Collapsing them would hide a cost problem inside an
+    availability metric.
+    """
+
+    def __init__(self, stage: str, spent_inr: float, budget_inr: float):
+        super().__init__(f"{stage}: case has spent ₹{spent_inr:.4f} of its "
+                         f"₹{budget_inr:.2f} ceiling")
+        self.stage = stage
+        self.spent_inr = spent_inr
+        self.budget_inr = budget_inr
+
+
 class ModelCallError(RuntimeError):
     """Every model and the retry budget were exhausted, and the step had no
     deterministic fallback it could safely use instead."""
@@ -151,11 +169,29 @@ async def structured(
     max_output_tokens: Optional[int] = None,
     timeout_s: float = 30.0,
     max_latency_ms: Optional[int] = None,
+    spent_inr: float = 0.0,
+    budget_inr: Optional[float] = None,
     schema_retries: int = 1,
     trace_id: Optional[str] = None,
 ) -> tuple[T, dict]:
     """Run a structured-output call. Returns (parsed_model, cost_entry)."""
     version = prompt_version(system)
+
+    # Over the case's budget. This is deliberately handled as a degradation
+    # rather than as a new kind of failure: the system already knows how to
+    # continue safely when a model is unavailable — take the step's safe
+    # default, mark it degraded, and let the grounding gate send the case to a
+    # person. A budget breach wants exactly that behaviour, so it reuses that
+    # path instead of inventing a second one nothing downstream understands.
+    if budget_inr is not None and spent_inr >= budget_inr:
+        logger.warning(f"case budget: {stage} skipped, ₹{spent_inr:.4f} already spent "
+                       f"against a ₹{budget_inr:.2f} ceiling")
+        if offline_fallback is None:
+            raise BudgetExceeded(stage, spent_inr, budget_inr)
+        entry = _entry(stage, "over_budget", version=version, degraded=True,
+                       errors=[f"case budget ₹{budget_inr:.2f} reached before {stage}"])
+        return schema.model_validate(offline_fallback), entry
+
     client = _get_client()
     if client is None:
         if offline_fallback is None:

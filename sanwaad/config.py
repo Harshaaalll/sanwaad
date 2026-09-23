@@ -57,6 +57,18 @@ HUMAN_COST_INR = {
 }
 
 
+# The most a single complaint may cost in models before the system stops
+# spending and hands it to a person. Not a runaway guard — the graph's shape
+# already bounds its own length, with MAX_REVISIONS and a fixed node order.
+# This is a policy statement: past this point a person handling one case is
+# cheaper than the model continuing to try, and a case that has cost this much
+# is a case something has gone unusual about.
+#
+# Generous by design. It should be reached by a pathological case, never by a
+# routine one, or it becomes a random escalation generator.
+MAX_CASE_COST_INR = float(os.getenv("SANWAAD_MAX_CASE_COST_INR", "5.0"))
+
+
 def inr_per_usd() -> float:
     try:
         return float(os.getenv("INR_PER_USD", "84.0"))
