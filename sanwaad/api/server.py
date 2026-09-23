@@ -27,7 +27,7 @@ if str(_ROOT) not in sys.path:
 
 from sanwaad.connectors import get_connector  # noqa: E402
 from sanwaad.delivery import DELIVERY  # noqa: E402
-from sanwaad.limits import CALLS, CASES, AtCapacity  # noqa: E402
+from sanwaad.limits import CALLS, CASES  # noqa: E402
 from sanwaad.limits import report as pool_report  # noqa: E402
 from sanwaad.models import Citation, Complaint  # noqa: E402
 from sanwaad.pipeline import (  # noqa: E402
@@ -84,6 +84,28 @@ app.add_middleware(
 
 # Live WebRTC calls, keyed by case. A case can only be on one call at a time.
 _calls: dict[str, Any] = {}
+# Strong references to the tasks driving them, because asyncio does not keep any.
+_call_tasks: set = set()
+
+
+async def _close_quietly(connection: Any) -> None:
+    """Let go of a peer connection without letting the attempt raise.
+
+    A leaked connection holds a port and an ICE agent for the life of the
+    process, and this runs on the path where something already went wrong.
+    """
+    for method in ("disconnect", "close"):
+        closer = getattr(connection, method, None)
+        if closer is None:
+            continue
+        try:
+            result = closer()
+            if asyncio.iscoroutine(result):
+                await result
+            return
+        except Exception:
+            logger.warning(f"could not {method}() a webrtc connection", exc_info=True)
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -286,42 +308,53 @@ async def api_offer(req: OfferRequest):
     brief = case["pending"]["brief"]
     citations = [Citation(**c) for c in state.get("citations", [])]
 
-    # A live call is refused, never queued. Someone is on the phone: a caller
-    # waiting for a slot is a caller listening to silence, and a busy signal is
-    # more honest than dead air.
-    if CALLS.running >= CALLS.limit:
-        CALLS.refused += 1
+    if req.case_id in _calls:
+        # Overwriting would strand the live connection with no one holding it.
+        raise HTTPException(409, "this case is already on a call")
+
+    # The slot is taken HERE, before an SDP answer exists. The first version
+    # checked capacity here and took the slot inside the background task, so
+    # three offers arriving in one tick all passed the check, all got a valid
+    # answer, and the third was refused after the browser had already negotiated
+    # a session — a caller connected to nobody, which is the dead air a busy
+    # signal exists to prevent. Refusing before there is anything to connect to
+    # is the only ordering that keeps that promise.
+    if not await CALLS.acquire_now():
         raise HTTPException(503, f"all {CALLS.limit} call slots are busy; try again shortly")
 
-    connection = SmallWebRTCConnection(ice_servers=["stun:stun.l.google.com:19302"])
-    await connection.initialize(sdp=req.sdp, type=req.type)
+    try:
+        connection = SmallWebRTCConnection(ice_servers=["stun:stun.l.google.com:19302"])
+        await connection.initialize(sdp=req.sdp, type=req.type)
+    except Exception:
+        CALLS.release_slot()      # never hold a slot for a call that never began
+        raise
     _calls[req.case_id] = connection
 
     async def _drive():
         try:
-            # The check above answers the caller; this holds the slot for the
-            # length of the call and closes the race between the two, when two
-            # offers arrive before either has started.
-            async with CALLS.slot(wait=False):
-                outcome = await run_voice_call(
-                    connection,
-                    case_id=req.case_id,
-                    complaint=state["complaint"]["text"],
-                    public_reply=(state.get("review") or {}).get("final_text", ""),
-                    summary=brief["summary"],
-                    category=brief["category"],
-                    language=brief["language"],
-                    citations=citations,
-                )
+            outcome = await run_voice_call(
+                connection,
+                case_id=req.case_id,
+                complaint=state["complaint"]["text"],
+                public_reply=(state.get("review") or {}).get("final_text", ""),
+                summary=brief["summary"],
+                category=brief["category"],
+                language=brief["language"],
+                citations=citations,
+            )
             await resume_case(req.case_id, outcome.model_dump(mode="json"))
-        except AtCapacity:
-            logger.warning(f"voice call for {req.case_id} refused: all call slots busy")
         except Exception:
             logger.exception(f"voice call failed for {req.case_id}")
         finally:
             _calls.pop(req.case_id, None)
+            CALLS.release_slot()
+            await _close_quietly(connection)
 
-    asyncio.create_task(_drive())
+    # Held in a set, not fire-and-forget: asyncio keeps only a weak reference to
+    # a running task, so a bare create_task can be collected mid-call.
+    task = asyncio.create_task(_drive())
+    _call_tasks.add(task)
+    task.add_done_callback(_call_tasks.discard)
 
     answer = connection.get_answer()
     return JSONResponse({"sdp": answer["sdp"], "type": answer["type"]})

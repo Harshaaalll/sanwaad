@@ -121,6 +121,57 @@ async def test_waiting_is_visible_while_it_is_happening():
     assert pool.report()["limit"] == 1
 
 
+def test_counters_survive_a_slot_held_across_two_live_loops():
+    """The failure this pins: the semaphore was per-loop and the counters were
+    global, so rebuilding one zeroed the other. A holder on the old loop then
+    decremented counters that had been reset, `running` went to -1, and stayed
+    there — and /api/offer gates live calls on `CALLS.running >= CALLS.limit`,
+    which can never be true again once the count is negative. A metrics bug
+    that silently removes the limit it is metering.
+    """
+    import threading
+
+    pool = Pool("cases", 2)
+    held, release = threading.Event(), threading.Event()
+
+    async def holder():
+        async with pool.slot():
+            held.set()
+            await asyncio.to_thread(release.wait)
+
+    t = threading.Thread(target=lambda: asyncio.run(holder()))
+    t.start()
+    held.wait(timeout=5)
+    assert pool.running == 1
+
+    async def other_loop():
+        async def work():
+            async with pool.slot():
+                await asyncio.sleep(0.01)
+        await asyncio.gather(*(work() for _ in range(4)))
+
+    asyncio.run(other_loop())          # a whole second loop, start to finish
+    release.set()
+    t.join(timeout=5)
+
+    assert pool.running == 0
+    assert pool.waiting == 0
+
+
+@pytest.mark.asyncio
+async def test_acquire_now_takes_a_slot_or_says_there_is_none():
+    """The voice path needs to decide before it can answer at all, so it takes
+    the slot itself rather than checking and hoping."""
+    pool = Pool("calls", 1)
+    assert await pool.acquire_now() is True
+    assert pool.running == 1
+    assert await pool.acquire_now() is False      # refused, not queued
+    assert pool.refused == 1
+    pool.release_slot()
+    assert pool.running == 0
+    assert await pool.acquire_now() is True       # the slot came back
+
+
 def test_a_pool_survives_being_used_by_a_second_event_loop():
     """These pools are module singletons and a process runs many loops — every
     asyncio.run, every test. An asyncio primitive belongs to the loop that
