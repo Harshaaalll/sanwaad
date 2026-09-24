@@ -438,6 +438,26 @@ def test_prune_removes_only_what_retention_allows(tmp_path, monkeypatch):
     assert applied["Traces"]["removed"] == 1 and names == ["recent", "undated"]
 
 
+def test_the_docs_numbers_match_the_code():
+    """DESIGN.md says how many tools and how many memory tiers there are, and
+    both sentences went stale — "four tools" when six were registered, "eight
+    stores" when there were twelve. A reader checks a number like that by
+    running the command, finds it wrong, and stops trusting the document.
+    Nothing but a test keeps prose honest as code moves under it.
+    """
+    from pathlib import Path
+
+    from sanwaad.memory import MEMORY_MAP
+    from sanwaad.tools import REGISTRY
+
+    assert len(REGISTRY.specs()) == 6
+    assert len(MEMORY_MAP) == 12
+
+    design = (Path(__file__).resolve().parent.parent / "sanwaad" / "DESIGN.md").read_text()
+    assert "There are four tools" not in design
+    assert "There are eight stores" not in design
+
+
 def test_every_memory_tier_states_its_model_exposure_and_personal_data():
     from sanwaad.memory import MEMORY_MAP
 

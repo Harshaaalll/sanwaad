@@ -13,8 +13,10 @@ of remembered data, and each lives where its ACCESS PATTERN says it should:
 
 For every kind this module states: where it is stored, what it holds, how long
 it is kept, whether it may reach a model, and what happens to personal data.
-Retention is enforced by `prune()` for the file-backed stores; the checkpoint
-database's retention is declared but not yet enforced (see DESIGN.md, exercise 3).
+`prune()` enforces retention for the tiers marked prunable. Two are not: the
+checkpoint database (SQLite, not a dated file) and conversation memory, whose
+30 days are honoured at recall but never deleted. The table below is the
+authority on which is which — `prunable` is a field, not a claim in prose.
 
     python -m sanwaad.memory           the map, and what pruning would remove
     python -m sanwaad.memory --apply   actually prune

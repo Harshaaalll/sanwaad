@@ -69,10 +69,19 @@ class Span:
         }
 
 
+# How many finished spans stay in memory. The JSONL on disk is the record;
+# this list only serves in-process readers like `summary()` and the evals. The
+# API server runs cases for the lifetime of the process, and an unbounded list
+# is a slow leak in the one component meant to stay up for weeks.
+MAX_SPANS_IN_MEMORY = 5_000
+
+
 class Tracer:
-    def __init__(self, path: Path = TRACE_PATH, enabled: bool = True):
+    def __init__(self, path: Path = TRACE_PATH, enabled: bool = True,
+                 max_spans: int = MAX_SPANS_IN_MEMORY):
         self.path = path
         self.enabled = enabled
+        self.max_spans = max_spans
         self.spans: list[Span] = []
 
     @contextmanager
@@ -98,6 +107,10 @@ class Tracer:
             s.ended = time.perf_counter()
             _current.reset(token)
             self.spans.append(s)
+            if len(self.spans) > self.max_spans:
+                # Drop the oldest. A trace is read while it is recent, and
+                # anything older is on disk anyway.
+                del self.spans[:len(self.spans) - self.max_spans]
             if self.enabled:
                 self._write(s)
 

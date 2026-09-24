@@ -25,7 +25,11 @@ def client(monkeypatch):
     `TestClient` only runs startup inside a `with` block; constructing it
     plainly leaves `_READY` exactly as each test arranges it.
     """
-    monkeypatch.setattr(server, "_READY", {"index": "ready", "clauses": 33, "error": None})
+    from sanwaad.rag.store import get_store
+
+    monkeypatch.setattr(server, "_READY",
+                        {"index": "ready", "clauses": len(get_store().clauses),
+                         "error": None})
     return TestClient(server.app)
 
 
@@ -62,7 +66,12 @@ def test_ready_is_true_once_the_index_is_loaded(client):
     body = r.json()
     assert body["ready"] is True
     assert body["index"] == "ready"
-    assert body["clauses"] == 33          # every clause in sanwaad/policy
+    # Against the real index, not the number this test's own fixture planted.
+    # `== 33` passed just as happily with a fixture saying 7, so deleting a
+    # clause from sanwaad/policy could never have failed it.
+    from sanwaad.rag.store import get_store
+
+    assert body["clauses"] == len(get_store().clauses)
     assert "error" not in body            # nothing to report when nothing broke
 
 

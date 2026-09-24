@@ -173,9 +173,13 @@ async def test_acquire_now_takes_a_slot_or_says_there_is_none():
 
 
 def test_a_pool_survives_being_used_by_a_second_event_loop():
-    """These pools are module singletons and a process runs many loops — every
-    asyncio.run, every test. An asyncio primitive belongs to the loop that
-    first awaited it, so one carried across loops raises instead of limiting."""
+    """Two loops one after another, which is the easy half: a semaphore carried
+    into a loop that did not create it raises instead of limiting.
+
+    This cannot detect loss of per-loop isolation — a single shared state
+    passes it — so the overlapping case is covered separately by
+    `test_counters_survive_a_slot_held_across_two_live_loops`, which is the one
+    that actually contends."""
     pool = Pool("test", 2)
 
     async def use():

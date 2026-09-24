@@ -212,7 +212,9 @@ name and description, an input schema, an output schema, permission
 boundaries, timeout and retry behaviour, and a structured error format. A tool
 must never accept a vague natural-language instruction.
 
-**In Sanwaad.** Open `tools/builtin.py`. There are four tools, one on each rung
+**In Sanwaad.** Open `tools/builtin.py`. Six tools are registered — three
+reads (`lookup_transaction`, `reversal_status`, `search_policy`) and one on each
+write rung
 of the **risk ladder**:
 
 | Tool | Risk | Who may call it | Approval |
@@ -275,7 +277,10 @@ broader: history, preferences, retrieved knowledge, summaries. A common mistake
 is to put all of it in a vector database. Choose storage by **access pattern**.
 Memory design is really data architecture.
 
-**In Sanwaad.** Run `python -m sanwaad.memory`. There are eight stores, and
+**In Sanwaad.** Run `python -m sanwaad.memory`. It prints every tier — twelve
+at the time of writing, and the command is the answer rather than this sentence,
+which is the point of generating the table. The ones below are the instructive
+ones, and
 every one declares where it lives, how long it is kept, whether it may reach a
 model, and what happens to personal data:
 
@@ -437,8 +442,16 @@ trusts the one before:
 
 The nine checks: `required_fields`, `transaction_exists`, `ownership`,
 `identity_verified`, `amount_matches`, `eligible_under_policy`,
-`within_ceiling`, `not_already_reversed`, `clause_exists`. All nine run even
-after one fails, so the reviewer sees the whole picture.
+`within_ceiling`, `not_already_reversed`, `clause_exists`. A failing check does
+not stop the ones after it, so the reviewer sees the whole picture rather than
+the first objection.
+
+One exception, and it is deliberate: `clause_exists` asks *which* clause
+entitles this refund, and only runs when `eligible_under_policy` found one. A
+proposal that is not eligible has no clause to name, so the check would report
+a second failure that is really the first one restated. Run
+`validate_action(...)` on an ineligible reversal and you get eight checks, not
+nine.
 
 Details worth studying:
 

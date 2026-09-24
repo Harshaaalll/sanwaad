@@ -1018,6 +1018,21 @@ async def publish_node(state: GrievanceState) -> dict:
                                  trace_id=state["case_id"])
     if not result.ok:
         reason = f"{result.error.code.value}: {result.error.message}"
+        # An approved reply that could not be posted is recoverable work, not a
+        # verdict. A circuit opens for thirty seconds after a blip and closes
+        # again; without this the reply a person approved is gone, with nothing
+        # anywhere to act on but an unresolved case nobody is paged about.
+        try:
+            from ..delivery import DELIVERY
+            from ..models import Complaint
+
+            DELIVERY.record_failure(Complaint(**complaint),
+                                    RuntimeError(f"approved reply not posted — {reason}"))
+        except Exception as exc:      # bookkeeping must never fail the node
+            from loguru import logger
+
+            logger.warning(f"could not queue the unposted reply for "
+                           f"{state['case_id']}: {exc}")
         return {
             "published": {"blocked": True, "reasons": [reason]},
             "events": [event("publish", f"NOT posted — {reason}")],

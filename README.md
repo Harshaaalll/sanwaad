@@ -246,7 +246,7 @@ python -m sanwaad.router                   # which model runs each step
 python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
-pytest tests/ -q                           # 341 tests, no API key
+pytest tests/ -q                           # 343 tests, no API key
 ```
 
 Or in Docker, where that download already happened at build time:
@@ -311,7 +311,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            341 tests
+tests/            343 tests
 ```
 
 ---
@@ -348,8 +348,12 @@ private repository.
 - **Voice leg.** The call itself needs Sarvam and Murf keys and is not covered by
   tests. What runs around it is: the spoken-number normaliser and the per-call
   hotword list are pure functions and are tested offline.
-- **Retention.** Retention is enforced for file-backed stores. The workflow-state
-  checkpoint declares 90 days but doesn't prune yet.
+- **Retention.** `prune()` enforces retention for the seven tiers marked
+  prunable. Two declare a retention and are not pruned yet: the workflow-state
+  checkpoint (90 days, SQLite) and conversation memory (30 days, which is
+  honoured at recall — an older turn is ignored — but not deleted).
+  `python -m sanwaad.memory` prints exactly which is which, and nothing is
+  scheduled: pruning runs when someone runs it.
 - **Offline loop policy.** Without a key, a scripted policy drives the support
   loop. It reads only what a model would see, but it doesn't wander, so offline
   the ladder shows workflows' value only on the misbehaving-agent scenario; the

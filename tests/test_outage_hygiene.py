@@ -192,3 +192,33 @@ async def test_a_voice_call_puts_its_cost_in_the_case_total():
         lg.interrupt = original
 
     assert out["costs"] == entries
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_could_not_be_posted_lands_in_the_queue(tmp_path, monkeypatch):
+    """An approved reply the circuit refused is recoverable work, not a
+    verdict: the circuit closes again in thirty seconds. Without a queue entry
+    the reply a person approved is simply gone, with nothing to act on but an
+    unresolved case nobody is paged about."""
+    import sanwaad.delivery as delivery_mod
+    from sanwaad.graph.nodes import publish_node
+    from sanwaad.tools import REGISTRY, ErrorCode, ToolError
+
+    log = delivery_mod.DeliveryLog(path=tmp_path / "delivery.json")
+    monkeypatch.setattr(delivery_mod, "DELIVERY", log)
+    REGISTRY.inject_fault("post_reply", ToolError(code=ErrorCode.UPSTREAM,
+                                                  message="reddit blip", retryable=True))
+    try:
+        out = await publish_node({
+            "case_id": "c9",
+            "complaint": {"external_id": "mock_9", "channel": "mock", "author": "u/x",
+                          "text": "money gone", "url": "u",
+                          "created_at": "2026-09-24T00:00:00+00:00"},
+            "review": {"decision": "approve", "final_text": "We are on it.",
+                       "reviewer": "human", "auto": False, "note": ""},
+        })
+    finally:
+        REGISTRY.clear_faults()
+
+    assert out["published"]["blocked"] is True
+    assert [f.external_id for f in log.retrying()] == ["mock_9"]
