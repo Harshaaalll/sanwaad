@@ -226,6 +226,11 @@ tokens against an 800-token budget), so memory and compaction are added (peak
 
 ---
 
+## Show it
+
+`DEMO.md` is a tested eight-minute runbook — six commands, no API key, with
+what each one prints and what to say over it.
+
 ## Run it
 
 ```bash
