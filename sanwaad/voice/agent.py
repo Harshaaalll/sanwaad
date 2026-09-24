@@ -24,6 +24,43 @@ STT_SARVAM_PER_SEC_INR = 30.0 / 3600.0
 TTS_MURF_PER_CHAR_USD = 10.0 / 1_000_000.0  # FALCON
 
 
+def missing_requirements() -> list[str]:
+    """What this deployment still needs before a call can happen.
+
+    Asked *before* an SDP answer is produced, never after. The first version
+    answered the browser with a valid answer and then failed in the background
+    on a missing key, so the caller negotiated a session with nobody on the
+    other end — the dead air a busy signal exists to prevent, arriving by a
+    different route than the capacity case it was written for.
+
+    Nothing here imports pipecat: `find_spec` only looks.
+    """
+    import importlib.util
+
+    missing: list[str] = []
+    for module, install in (("pipecat", "pipecat"),
+                            ("pipecat_murf_tts", "pipecat-murf-tts")):
+        try:
+            found = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            missing.append(f"{install} (pip install -r requirements-voice.txt)")
+
+    for var in ("SARVAM_API_KEY", "MURF_API_KEY"):
+        if not os.getenv(var):
+            missing.append(var)
+
+    # The call's own model, whichever way it is reached.
+    if os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("1", "true"):
+        if not os.getenv("GOOGLE_CLOUD_PROJECT"):
+            missing.append("GOOGLE_CLOUD_PROJECT")
+    elif not os.getenv("GOOGLE_API_KEY"):
+        missing.append("GOOGLE_API_KEY")
+
+    return missing
+
+
 def _require_env(name: str) -> str:
     value = os.getenv(name)
     if not value:

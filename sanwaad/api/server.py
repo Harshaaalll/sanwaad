@@ -156,6 +156,12 @@ async def ready():
     # something reports the queue. By the time the only signal is latency, it
     # is too late to act on.
     state["concurrency"] = pool_report()
+    # Reported, never a reason to fail: the text pipeline is complete without
+    # the voice leg, and a deployment that never places calls is a valid one.
+    from sanwaad.voice.agent import missing_requirements
+
+    lacking = missing_requirements()
+    state["voice"] = "ready" if not lacking else f"not configured ({', '.join(lacking)})"
     # What the system may currently do without anyone: the number an operator
     # actually wants when they ask "is this thing running itself yet".
     earned = [r for r in AUTONOMY.report() if r["level"] in ("SUPERVISED", "AUTONOMOUS")]
@@ -312,6 +318,17 @@ class OfferRequest(BaseModel):
 @app.post("/api/offer")
 async def api_offer(req: OfferRequest):
     """Browser SDP offer -> answer, and start the voice pipeline for the case."""
+    # Asked first, because the question "can this deployment place a call at
+    # all" is answerable without importing anything — and importing pipecat to
+    # find out it is not installed raises ModuleNotFoundError, which reaches the
+    # browser as a 500 and tells it nothing.
+    from sanwaad.voice.agent import missing_requirements
+
+    lacking = missing_requirements()
+    if lacking:
+        raise HTTPException(503, "the voice leg is not configured here — missing "
+                                 + ", ".join(lacking))
+
     from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 
     from sanwaad.voice.agent import run_voice_call

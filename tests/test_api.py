@@ -121,6 +121,39 @@ def test_the_dead_letter_endpoint_returns_both_queues(client):
     assert isinstance(body["dead"], list)
 
 
+def test_a_call_is_refused_before_an_sdp_exists_when_it_cannot_be_staffed(client, monkeypatch):
+    """The failure this closes: /api/offer answered 200 with a valid SDP and
+    then died in the background on a missing key, so the browser negotiated a
+    session with nobody and showed "connection: failed" — which tells whoever
+    is watching nothing about why. Same shape as the capacity bug, arriving by
+    a different route."""
+    monkeypatch.delenv("SARVAM_API_KEY", raising=False)
+    monkeypatch.delenv("MURF_API_KEY", raising=False)
+
+    r = client.post("/api/offer", json={"case_id": "case_x", "sdp": "v=0", "type": "offer"})
+    assert r.status_code in (404, 503)
+    if r.status_code == 503:
+        assert "SARVAM_API_KEY" in r.json()["detail"]
+
+
+def test_missing_voice_requirements_names_each_one(monkeypatch):
+    from sanwaad.voice.agent import missing_requirements
+
+    for var in ("SARVAM_API_KEY", "MURF_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    lacking = missing_requirements()
+    assert {"SARVAM_API_KEY", "MURF_API_KEY", "GOOGLE_API_KEY"} <= set(lacking)
+
+    # With the keys set, only packages can still be missing — and whether the
+    # voice extras are installed depends on the environment, so asserting an
+    # empty list here would make this test pass or fail on where it ran.
+    monkeypatch.setenv("SARVAM_API_KEY", "x")
+    monkeypatch.setenv("MURF_API_KEY", "x")
+    monkeypatch.setenv("GOOGLE_API_KEY", "x")
+    assert all("pip install" in item for item in missing_requirements())
+
+
 @pytest.mark.asyncio
 async def test_warming_records_a_failure_instead_of_crashing_startup(monkeypatch):
     """If the index cannot be built, the process must come up and say so. A
