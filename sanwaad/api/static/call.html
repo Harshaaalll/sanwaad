@@ -14,7 +14,10 @@
   button { margin-top:18px; padding:13px 26px; border-radius:9px; border:0; cursor:pointer;
            background:#5b9dff; color:#04101f; font-weight:600; font-size:15px; }
   button:disabled { opacity:.5; cursor:default; }
-  #state { margin-top:16px; font-family:ui-monospace,Menlo,monospace; font-size:12px; color:#3ecf8e; }
+  #state { margin-top:16px; font-family:ui-monospace,Menlo,monospace; font-size:12px;
+           color:#3ecf8e; line-height:1.6; }
+  /* A failure printed in the success colour reads as success. */
+  #state.bad { color:#ff8f6b; }
   code { color:#5b9dff; }
 </style>
 </head>
@@ -29,7 +32,23 @@
 </div>
 <script>
 const CASE_ID = "__CASE_ID__";
-const say = m => document.getElementById("state").textContent = m;
+const say = (m, bad = false) => {
+  const el = document.getElementById("state");
+  el.textContent = m;
+  el.classList.toggle("bad", bad);
+};
+
+// The server answers a refusal as {"detail": "..."} — show the sentence, not
+// the envelope. Whoever is looking at this is being told why the call cannot
+// happen, and JSON punctuation is in the way of that.
+async function reason(response) {
+  const body = await response.text();
+  try {
+    return JSON.parse(body).detail ?? body;
+  } catch {
+    return body;
+  }
+}
 
 async function start() {
   const btn = document.getElementById("go");
@@ -42,7 +61,8 @@ async function start() {
   pc.addTransceiver("audio", {direction:"recvonly"});
 
   pc.ontrack = e => { document.getElementById("audio").srcObject = e.streams[0]; };
-  pc.onconnectionstatechange = () => say("connection: " + pc.connectionState);
+  pc.onconnectionstatechange = () => say("connection: " + pc.connectionState,
+                                         ["failed", "disconnected"].includes(pc.connectionState));
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
@@ -56,7 +76,7 @@ async function start() {
   say("connecting…");
   const r = await fetch("/api/offer", {method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({case_id: CASE_ID, sdp: pc.localDescription.sdp, type: pc.localDescription.type})});
-  if (!r.ok) { say("failed: " + await r.text()); btn.disabled = false; return; }
+  if (!r.ok) { say(await reason(r), true); btn.disabled = false; return; }
   await pc.setRemoteDescription(await r.json());
   say("connected — say hello");
 }
