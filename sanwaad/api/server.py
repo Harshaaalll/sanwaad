@@ -270,6 +270,7 @@ class VoiceOutcomeRequest(BaseModel):
     resolved: bool = False
     summary: str = ""
     citations_used: list[str] = []
+    costs: list[dict] = []
 
 
 @app.post("/api/cases/{case_id}/voice-outcome")

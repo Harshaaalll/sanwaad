@@ -264,10 +264,12 @@ async def run_voice_call(
     for said, passed_on in heard:
         logger.info(f"[voice:{case_id}] transcript record: {said!r} -> {passed_on!r}")
 
+    model = os.getenv("SANWAAD_VOICE_MODEL", "gemini-2.5-flash")
     return VoiceOutcome(
         happened=True,
         channel="webrtc",
         duration_s=duration,
+        costs=metrics.as_cost_entries(model),
         resolved=False,  # set by the agent's own wrap-up tool, or by review
         summary=f"WebRTC callback, {duration:.0f}s",
         citations_used=used,

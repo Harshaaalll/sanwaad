@@ -101,7 +101,17 @@ async def triage_node(state: GrievanceState) -> dict:
                 budget_inr=MAX_CASE_COST_INR,
                 trace_id=state["case_id"],
             )
-            TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"), namespace="triage")
+            # Only a real answer is worth keeping. A degraded result is the
+            # keyword stub standing in for a model that could not run, and
+            # caching it lets a thirty-second provider blip go on answering for
+            # every similar complaint until the entry expires — an outage
+            # contaminating healthy traffic long after it ended, and arriving
+            # as a clean cache hit with nothing marked degraded about it.
+            if cost.get("degraded") or cost.get("model") in NON_CALL_MODELS:
+                span.set(cache="not-stored", cache_skip_reason=cost.get("model"))
+            else:
+                TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"),
+                                 namespace="triage")
         span.set(cost_inr=cost.get("inr", 0.0))
 
     # Deterministic override. A keyword match here outranks the model, because
@@ -1200,8 +1210,16 @@ async def voice_node(state: GrievanceState) -> dict:
     })
 
     result = VoiceOutcome(**outcome) if isinstance(outcome, dict) else VoiceOutcome()
+    if result.happened and not result.costs:
+        # Not fatal, but worth saying: the closure is about to report a
+        # cost-per-resolution that leaves out the most expensive step.
+        from loguru import logger
+
+        logger.warning(f"[{state['case_id']}] voice call reported no costs; "
+                       f"the case total will understate what it spent")
     return {
         "voice": result.model_dump(mode="json"),
+        "costs": result.costs,
         "events": [event(
             "voice",
             f"{result.channel} call, {result.duration_s:.0f}s, "
@@ -1229,7 +1247,31 @@ async def close_node(state: GrievanceState) -> dict:
         voice_clauses=voice.get("citations_used", []),
     )
 
-    resolved = bool(voice.get("resolved")) or not (state.get("escalation") or {}).get("needed")
+    # Resolved means something actually reached the customer, not merely that
+    # the graph ran out of nodes. The old rule was "no escalation needed", so a
+    # reply a reviewer rejected, a publish the guardrail blocked and a case
+    # whose every action failed all closed resolved=True with nothing sent —
+    # the one status a person scanning a queue relies on, reporting success for
+    # a case that did nothing.
+    published = bool(state.get("published")) and not (state.get("published") or {}).get("blocked")
+    rejected = (state.get("review") or {}).get("decision") == "reject"
+    results = state.get("action_results") or []
+    unfinished = [r["action_id"] for r in results
+                  if r.get("status") in ("failed", "blocked", "not_approved")]
+    escalation_open = bool((state.get("escalation") or {}).get("needed")) and not voice.get("happened")
+
+    if voice.get("resolved"):
+        resolved, why = True, "the call resolved it"
+    elif rejected:
+        resolved, why = False, "a reviewer rejected the reply; nothing went out"
+    elif not published:
+        resolved, why = False, "no reply was published"
+    elif unfinished:
+        resolved, why = False, f"actions did not complete: {unfinished}"
+    elif escalation_open:
+        resolved, why = False, "a callback is owed and has not happened"
+    else:
+        resolved, why = True, "reply published and every action completed"
 
     # Count attempts, not cost entries. A call that needed a schema retry and a
     # fallback is three calls on the invoice; the rules-based judge is none.
@@ -1239,7 +1281,6 @@ async def close_node(state: GrievanceState) -> dict:
         for c in costs
     )
 
-    results = state.get("action_results") or []
     actions = {
         status: [r["action_id"] for r in results if r.get("status") == status]
         for status in ("executed", "blocked", "not_approved", "failed")
@@ -1248,6 +1289,7 @@ async def close_node(state: GrievanceState) -> dict:
     return {
         "closure": {
             "resolved": resolved,
+            "resolution_reason": why,
             "total_cost_usd": round(total_usd, 6),
             "total_cost_inr": round(total_inr, 4),
             "llm_calls": llm_calls,
@@ -1257,7 +1299,7 @@ async def close_node(state: GrievanceState) -> dict:
         },
         "events": [event(
             "close",
-            f"closed {'resolved' if resolved else 'unresolved'}, ₹{total_inr:.4f}, "
+            f"closed {'resolved' if resolved else 'unresolved'} ({why}), ₹{total_inr:.4f}, "
             f"channels {'consistent' if receipt.consistent else 'DIVERGED'}",
         )],
     }

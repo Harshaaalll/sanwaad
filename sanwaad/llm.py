@@ -253,8 +253,14 @@ async def structured(
                 _check_latency(stage, started, max_latency_ms, span)
                 return result, entry
 
+        # The cost goes on the span too. Omitting it reported ₹0 for exactly
+        # the calls that burned the most tokens — every model tried, every
+        # retry spent — so `python -m sanwaad.obs` showed the cheapest figure
+        # for the most expensive thing the layer does.
+        degraded_inr = usd * inr_per_usd()
         span.set(degraded=True, attempts=attempts, schema_failures=schema_failures,
-                 llm_errors=errors[-3:])
+                 cost_inr=degraded_inr, prompt_tokens=prompt_tokens,
+                 output_tokens=output_tokens, llm_errors=errors[-3:])
         _check_latency(stage, started, max_latency_ms, span)
         if offline_fallback is None:
             raise ModelCallError(stage, errors)

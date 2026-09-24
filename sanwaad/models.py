@@ -168,6 +168,11 @@ class VoiceOutcome(BaseModel):
     summary: str = ""
     citations_used: list[str] = Field(default_factory=list)
     transcript_path: Optional[str] = None
+    # What the call cost, in the same shape the text steps emit. The voice leg
+    # bills for speech and speech synthesis as well as tokens, and a call is
+    # the most expensive thing a case can do, so leaving it out of the rollup
+    # made cost-per-resolution a text-only number wearing a whole-case label.
+    costs: list[dict] = Field(default_factory=list)
 
 
 class CostEntry(BaseModel):
