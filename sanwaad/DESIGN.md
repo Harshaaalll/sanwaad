@@ -763,6 +763,7 @@ span or audit record is written, not afterwards.
 | Bounded concurrency under a burst | `limits.py` | `test_a_burst_runs_at_the_limit_not_all_at_once` |
 | A ceiling on cost per case | `config.MAX_CASE_COST_INR` | `test_a_spent_case_does_not_call_the_model_at_all` |
 | Autonomy earned and revocable | `autonomy.py` | `test_authority_contracts_when_agreement_drops` |
+| Agents route work, code approves the route | `handoff.py` | `test_a_bouncing_pair_cannot_run_forever` |
 
 ---
 
@@ -1313,6 +1314,67 @@ that `SANWAAD_AUTONOMY=off` is there for the opposite request. What they cannot
 have is autonomy on a capability with no track record, because the thing they
 actually want is not "no human" — it is "no human *and* it keeps working", and
 only one of those is purchasable in advance.
+</details>
+
+---
+
+## Lesson 22 — Handing work over without handing over control
+
+**The idea.** A fixed graph is right when the shape of the work is known in
+advance. It is wrong for "a lead arrives, and whoever qualifies it decides who
+sees it next", where the route depends on what the first agent *found*. The
+obvious answer — let agents call each other — is also how multi-agent systems
+become impossible to reason about: control flow moves into prompts, two agents
+pass work back and forth until a budget dies, and the reason a piece of work
+ended up somewhere exists only in a transcript.
+
+There is a third option, and it is the one the tool layer already uses. An
+agent **proposes** a handoff; code validates it against a declared routing
+table and grants or refuses it. The model never transfers control — it
+requests a transfer. Propose, validate, execute, the same shape as an action,
+applied to routing. It buys the same thing: the model can be wrong without the
+system being unsafe.
+
+**In Sanwaad.** `handoff.py` is the protocol and `missions.py` declares one:
+
+```
+qualify ──► enrich ──► reach_out ──► booked
+   │           │            │
+   └──► disqualified        └──► nurture
+```
+
+Five ways a handoff is refused, each an outcome with a sentence rather than an
+exception:
+
+| Refusal | The failure it prevents |
+|---|---|
+| the target is not a step | an agent inventing a route |
+| this step may not hand there | an undeclared edge between two real steps |
+| the target needs a field this payload lacks | a step discovering the gap inside its own prompt |
+| the target is already in the trail | two agents bouncing work forever |
+| the chain is longer than the mission allows | a route that is not converging |
+
+And the declaration itself is checked — `Mission.check()` refuses a table with
+an unknown target, an unreachable step, a non-terminal dead end, or no
+reachable ending. A typo fails on import rather than when a lead hits that
+branch at two in the morning.
+
+**Why a second mission exists.** The lead pipeline is not a feature; it is the
+evidence that the harness is not complaint-shaped. It inherits everything
+without asking: typed tools on a risk ladder, the circuit breaker, bounded
+concurrency, the cost ceiling, traces, the dead-letter queue, and autonomy
+capped per step by `ceiling_for(step.tools)` — so `reach_out` can earn its way
+to acting alone and a step wired to `initiate_reversal` never could.
+
+**Try it.** `python -m sanwaad.missions` runs four leads and prints the route
+each one took, with the reason for every hop.
+
+<details><summary><b>Check yourself:</b> The routing table lets <code>b</code> hand back to <code>a</code>. Why is that handoff still refused?</summary>
+
+Because the table says which edges *exist*, and the trail says which have been
+used. Revisiting is how a pair of agents loops forever while each one behaves
+reasonably, so a step sees a piece of work once. An edge that genuinely needs
+to be taken twice is a sign the two steps are really one.
 </details>
 
 ---

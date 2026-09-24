@@ -241,12 +241,13 @@ python -m sanwaad.evals.retrieval          # retrieval strategies compared
 python -m sanwaad.memory                   # what is remembered, where, how long
 python -m sanwaad.delivery                 # what gave up, and why
 python -m sanwaad.autonomy                 # what it has earned the right to do alone
+python -m sanwaad.missions                 # a second workflow on the same harness
 python -m sanwaad.obs                      # per-step p50/p95, budgets, spend
 python -m sanwaad.router                   # which model runs each step
 python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
-pytest tests/ -q                           # 343 tests, no API key
+pytest tests/ -q                           # 361 tests, no API key
 ```
 
 Or in Docker, where that download already happened at build time:
@@ -305,13 +306,15 @@ sanwaad/
   rag/            clause index, local embeddings, BM25 + RRF, agentic retrieval
   guardrails.py   PII redaction, money-promise and injection checks
   autonomy.py     authority each capability has earned, from real reviews
+  handoff.py      agents propose a route; code grants or refuses it
+  missions.py     declared workflows — the lead pipeline, on the same harness
   delivery.py     the dead-letter queue: what gave up, and why
   evals/          golden set, retrieval, trajectory and loop evals, harness
   voice/          the call brief, hotwords, spoken numbers, the WebRTC agent
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            343 tests
+tests/            361 tests
 ```
 
 ---
