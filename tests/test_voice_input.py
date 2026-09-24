@@ -255,8 +255,31 @@ def test_hotwords_come_from_this_case_not_a_fixed_list():
 
 
 def test_the_list_stays_short_enough_to_be_worth_boosting():
-    huge = " ".join(f"Merchant{i}" for i in range(80))
-    assert len(build_hotwords(complaint=huge)) <= MAX_HOTWORDS
+    """The old version of this fed `Merchant0 Merchant1 ...`, which produces
+    four terms, not eighty: `_PROPER` needs a name with no digits in it. So the
+    cap was never reached and deleting it left the suite green. These names
+    actually reach it."""
+    huge = " ".join(f"Paytm{chr(97 + i % 26)}{chr(97 + i // 26)}kart" for i in range(80))
+    words = build_hotwords(complaint=huge)
+    assert len(words) == MAX_HOTWORDS
+
+
+def test_a_shouted_complaint_does_not_fill_the_bias_list_with_shouting():
+    """Capitals are how an acronym announces itself and also how an angry
+    customer types. Every word matched, so FAILED and NOBODY were boosted —
+    worse than no list, because the ASR then hears them everywhere while the
+    terms worth boosting are crowded out."""
+    words = build_hotwords(complaint=(
+        "MY UPI PAYMENT FAILED AND THE MONEY IS GONE. I HAVE CALLED SUPPORT "
+        "FIVE TIMES AND NOBODY HELPS ME. THIS IS THE WORST APP EVER."))
+    assert "UPI" in words                      # vocabulary we recognise survives
+    assert not {"FAILED", "NOBODY", "EVER", "CALLED"} & set(words)
+
+
+def test_an_ordinary_complaint_still_gets_its_acronyms():
+    words = build_hotwords(complaint=(
+        "My UPI payment to Swiggy failed and the NACH mandate is still active."))
+    assert {"UPI", "NACH", "Swiggy"} <= set(words)
 
 
 def test_the_call_prompt_carries_the_hotwords_it_was_given():

@@ -126,6 +126,23 @@ def test_high_severity_is_never_autonomous_however_good_the_record(tmp_path, mon
     assert "whatever the track record says" in reason
 
 
+def test_a_upi_address_is_redacted_like_any_other_identifier():
+    """In a payments product the VPA is the identifier a customer is likeliest
+    to type, and the email pattern misses every one: a UPI handle has no dot
+    after the @. It reached the pattern store, the audit log and the
+    dead-letter excerpts that /api/delivery renders."""
+    from sanwaad.guardrails import redact
+
+    for said in ("refund to rohit.mhrs@okhdfcbank please", "my vpa is anita92@ybl"):
+        clean, kinds = redact(said)
+        assert "@" not in clean and kinds == ["vpa"]
+
+    # A phone-shaped VPA loses the whole address, not just its digits.
+    assert redact("9876543210@paytm")[0] == "[upi id]"
+    # And the brand mention that starts half the complaints is not an address.
+    assert redact("@NimbusPay double debit ₹640")[0] == "@NimbusPay double debit ₹640"
+
+
 # --- Consistency receipt ---------------------------------------------------
 
 def test_call_going_deeper_than_the_tweet_is_not_a_divergence():

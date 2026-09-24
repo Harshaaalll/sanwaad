@@ -180,7 +180,7 @@ def build_hotwords(
     ordered: list[str] = [*_brand_terms(), *extra]
 
     ordered.extend(_names_in(complaint))
-    ordered.extend(_ACRONYM.findall(complaint))
+    ordered.extend(_acronyms_in(complaint))
 
     # Jargon, but only what this case is actually about. `category` is included
     # because the word itself is often spoken ("this is a billing issue").
@@ -202,6 +202,26 @@ def build_hotwords(
         if len(out) == MAX_HOTWORDS:
             break
     return out
+
+
+def _acronyms_in(complaint: str) -> list[str]:
+    """All-caps tokens, but only where all-caps still means something.
+
+    Capitals are how an acronym announces itself — and also how an angry
+    customer types. In a shouted complaint nothing stands out, so every word
+    matched and the bias list filled with FAILED, NOBODY and EVER. A list of
+    stop words is worse than no list: it biases the ASR toward hearing them
+    everywhere while crowding out the terms worth boosting.
+
+    A stop-word list cannot fix that, because the words are ordinary ones. What
+    can is noticing that the signal is absent: when the complaint is mostly
+    capitals, only vocabulary we already recognise counts.
+    """
+    letters = [c for c in complaint if c.isalpha()]
+    shouting = bool(letters) and sum(c.isupper() for c in letters) / len(letters) > 0.6
+    known = {t.lower() for t in _DOMAIN_TERMS}
+    return [a for a in _ACRONYM.findall(complaint)
+            if a.lower() not in _NOT_A_NAME and (not shouting or a.lower() in known)]
 
 
 def _names_in(complaint: str) -> list[str]:

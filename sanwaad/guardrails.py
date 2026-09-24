@@ -37,6 +37,13 @@ from typing import Literal
 _PHONE = re.compile(r"(?:(?:\+?91|0)[\s-]?)?(?<!\d)[6-9](?:[\s-]?\d){9}(?!\d)")
 _UTR = re.compile(r"\b\d{12,22}\b")                       # UTR / RRN / account
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b")
+# A UPI address — rohit.mhrs@okhdfcbank, anita92@ybl. In a payments product
+# this is the identifier a customer is most likely to type, and the email
+# pattern misses every one of them because a VPA handle has no dot after the
+# @. It must be tried after the email pattern (an email is the more specific
+# shape) and before the phone pattern, or "9876543210@paytm" loses its digits
+# to the phone rule and leaves the bank suffix sitting in the log.
+_VPA = re.compile(r"\b[\w.-]{2,}@[a-z]{2,}\b", re.IGNORECASE)
 # Aadhaar is 12 digits, never starts 0 or 1, and is conventionally written in
 # 4-4-4 groups. A *bare* 12-digit run is far more often a UTR, so we require the
 # separators here and let UTR claim the ungrouped case. Both get redacted either
@@ -54,13 +61,14 @@ _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("utr", _UTR),           # bare 12-22 digit runs
 
     ("email", _EMAIL),
+    ("vpa", _VPA),
     ("pan", _PAN),
     ("phone", _PHONE),
 ]
 
 _PLACEHOLDER = {
     "phone": "[phone]", "utr": "[reference]", "email": "[email]",
-    "aadhaar": "[aadhaar]", "pan": "[pan]", "card": "[card]",
+    "aadhaar": "[aadhaar]", "pan": "[pan]", "card": "[card]", "vpa": "[upi id]",
 }
 
 
