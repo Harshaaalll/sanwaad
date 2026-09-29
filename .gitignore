@@ -17,3 +17,7 @@ venv/
 # Runtime state: rebuilt or regenerated on first run
 sanwaad/data/*
 !sanwaad/data/.gitkeep
+
+# Claude Code test-gate state
+.claude/.gate
+HANDOFF.md

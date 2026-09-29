@@ -508,16 +508,27 @@ def prioritise(triage: dict, verdict: dict, pattern: dict) -> Priority:
     authenticity = float(verdict.get("authenticity", 0.5))
     reach = int(verdict.get("reach", 0))
 
-    score = severity * 10.0 + authenticity * 8.0
-    score += min(reach / 1000.0, 20.0)
-    score += _PATTERN_WEIGHT.get(level, 0.0)
-    if verdict.get("history_with_brand"):
-        score += 5.0
+    # Kept as named parts so the console can show where a score came from:
+    # "43.1" alone does not tell a reviewer whether reach or severity put a
+    # case at the top of the queue.
+    parts = {
+        "severity": severity * 10.0,
+        "authenticity": authenticity * 8.0,
+        "reach": min(reach / 1000.0, 20.0),
+        "pattern": _PATTERN_WEIGHT.get(level, 0.0),
+        "history": 5.0 if verdict.get("history_with_brand") else 0.0,
+    }
+    score = sum(parts.values())
+    if parts["history"]:
         reasons.append("known customer with prior cases")
+
+    def _priority(tier: str, drafting: bool) -> Priority:
+        return Priority(tier=tier, score=round(score, 1), reasons=reasons, drafting=drafting,
+                        components={k: round(v, 2) for k, v in parts.items()})
 
     if level == "crisis":
         reasons.append(f"crisis: {pattern.get('cluster_size')} authors reporting the same thing")
-        return Priority(tier="crisis", score=round(score, 1), reasons=reasons, drafting=True)
+        return _priority("crisis", True)
 
     # Not worth drafting for. Note what this does NOT do: it does not delete
     # the case or mark it handled. It is recorded, counted by the pattern
@@ -525,11 +536,11 @@ def prioritise(triage: dict, verdict: dict, pattern: dict) -> Priority:
     # saw it" are different failures, and only one of them is defensible.
     if not verdict.get("reply_worthy", True):
         reasons.append(f"{verdict.get('author_class')} with reach {reach}: logged, not answered")
-        return Priority(tier="ignore", score=round(score, 1), reasons=reasons, drafting=False)
+        return _priority("ignore", False)
 
     if not triage.get("is_complaint") and severity < 4:
         reasons.append("not a complaint")
-        return Priority(tier="ignore", score=round(score, 1), reasons=reasons, drafting=False)
+        return _priority("ignore", False)
 
     if severity >= 4 or level == "watch" or reach >= JUDGE.reply_worthy_reach:
         if severity >= 4:
@@ -538,10 +549,10 @@ def prioritise(triage: dict, verdict: dict, pattern: dict) -> Priority:
             reasons.append(f"{pattern.get('cluster_size')} similar in the last hour")
         if reach >= JUDGE.reply_worthy_reach:
             reasons.append(f"audience of {reach:,}")
-        return Priority(tier="priority", score=round(score, 1), reasons=reasons, drafting=True)
+        return _priority("priority", True)
 
     reasons.append("routine complaint")
-    return Priority(tier="routine", score=round(score, 1), reasons=reasons, drafting=True)
+    return _priority("routine", True)
 
 
 async def prioritise_node(state: GrievanceState) -> dict:
@@ -938,56 +949,95 @@ async def plan_node(state: GrievanceState) -> dict:
 # Review gate
 # ---------------------------------------------------------------------------
 
+def review_checks(state: GrievanceState) -> tuple[list[dict], bool, str]:
+    """Every rule the review gate applies to this case, and what it decided.
+
+    Returns (checks, allowed, reason). Each check is {rule, passed, detail,
+    kind}: `hard` rules are safety invariants no track record buys past,
+    `severity` is the fixed ceiling, and `earned` is per-category autonomy.
+    The gate itself is derived from this list, so the explanation a reviewer
+    reads in the console and the decision the gate made cannot drift apart.
+    """
+    triage = state["triage"]
+    draft = state["draft"]
+    grounding = state.get("grounding") or {}
+    blocking = [g for g in (state.get("guardrails") or []) if g.get("severity") == "block"]
+
+    # Ordered by consequence, so the reason a reviewer reads first is the one
+    # that matters most when several apply at once.
+    hard = [
+        # Including proposals that failed validation: a refused attempt to move
+        # someone else's money is exactly what a person should see.
+        ("no money-moving action",
+         not any(a["proposal"]["risk"] == "write_high" for a in (state.get("actions") or [])),
+         "a money-moving action is proposed; a human approves the exact action"),
+        ("no instruction-like text",
+         not state.get("injection_flagged"),
+         "complaint contains instruction-like text; never auto-post"),
+        # During an incident the individually-correct reply is the dangerous
+        # one: forty auto-posted apologies with slightly different wording IS
+        # the screenshot. One human decides the line, then everything uses it.
+        ("not part of a crisis",
+         (state.get("pattern") or {}).get("level") != "crisis",
+         "crisis pattern detected; incident replies go out under one human line"),
+        ("no guardrail block",
+         not blocking,
+         f"guardrail block: {[g['rule'] for g in blocking]}"),
+        ("promises no compensation",
+         not (REVIEW.forbid_auto_compensation and draft.get("promises_compensation")),
+         "draft commits money; clause RFD-05 requires approval"),
+        ("every claim grounded",
+         not (REVIEW.require_grounded and not grounding.get("grounded")),
+         "draft contains unsupported claims"),
+        ("needs no private data",
+         not triage.get("needs_private_data"),
+         "resolution needs account data not available publicly"),
+    ]
+    checks = [{"rule": rule, "passed": ok, "detail": "" if ok else why, "kind": "hard"}
+              for rule, ok, why in hard]
+    failed = next((c for c in checks if not c["passed"]), None)
+    if failed:
+        return checks, False, failed["detail"]
+
+    # Everything above is a hard rule: a safety invariant that no track record
+    # buys its way past. What is left is the ordinary case, and how much of it
+    # the system may handle alone is earned rather than fixed.
+    severity = triage["severity"]
+    if severity <= REVIEW.auto_post_max_severity:
+        reason = "low severity, fully grounded, commits nothing"
+        checks.append({"rule": f"severity ≤ {REVIEW.auto_post_max_severity} posts on its own",
+                       "passed": True, "detail": reason, "kind": "severity"})
+        return checks, True, reason
+    if severity > AUTONOMY_MAX_SEVERITY:
+        reason = (f"severity {severity} is above {AUTONOMY_MAX_SEVERITY}, "
+                  f"where a person decides whatever the track record says")
+        checks.append({"rule": f"severity ≤ {AUTONOMY_MAX_SEVERITY} for any autonomy",
+                       "passed": False, "detail": reason, "kind": "severity"})
+        return checks, False, reason
+
+    category = triage.get("category", "general")
+    verdict = autonomy_for(f"reply.{category}")
+    if verdict.acts_without_a_person:
+        reason = (f"severity {severity}: reply.{category} is "
+                  f"{verdict.level.name.lower()} — {verdict.reason}")
+    else:
+        reason = (f"severity {severity} above the fixed ceiling "
+                  f"{REVIEW.auto_post_max_severity}, and reply.{category} "
+                  f"has not earned it: {verdict.reason}")
+    checks.append({"rule": f"reply.{category} has earned autonomy",
+                   "passed": verdict.acts_without_a_person,
+                   "detail": f"{verdict.level.name.lower()} — {verdict.reason}", "kind": "earned"})
+    return checks, verdict.acts_without_a_person, reason
+
+
 def auto_post_allowed(state: GrievanceState) -> tuple[bool, str]:
     """Decide whether this reply may go out without a human.
 
     Returns (allowed, reason). The reason is logged either way, because
     "why did this need a human" is the question a pilot customer asks most.
     """
-    triage = state["triage"]
-    draft = state["draft"]
-    grounding = state.get("grounding") or {}
-
-    # Ordered by consequence, so the reason a reviewer reads first is the one
-    # that matters most when several apply at once.
-    if any(a["proposal"]["risk"] == "write_high" for a in (state.get("actions") or [])):
-        # Including proposals that failed validation: a refused attempt to move
-        # someone else's money is exactly what a person should see.
-        return False, "a money-moving action is proposed; a human approves the exact action"
-    if state.get("injection_flagged"):
-        return False, "complaint contains instruction-like text; never auto-post"
-    if (state.get("pattern") or {}).get("level") == "crisis":
-        # During an incident the individually-correct reply is the dangerous
-        # one: forty auto-posted apologies with slightly different wording IS
-        # the screenshot. One human decides the line, then everything uses it.
-        return False, "crisis pattern detected; incident replies go out under one human line"
-    blocking = [g for g in (state.get("guardrails") or []) if g.get("severity") == "block"]
-    if blocking:
-        return False, f"guardrail block: {[g['rule'] for g in blocking]}"
-    if REVIEW.forbid_auto_compensation and draft.get("promises_compensation"):
-        return False, "draft commits money; clause RFD-05 requires approval"
-    if REVIEW.require_grounded and not grounding.get("grounded"):
-        return False, "draft contains unsupported claims"
-    if triage.get("needs_private_data"):
-        return False, "resolution needs account data not available publicly"
-
-    # Everything above is a hard rule: a safety invariant that no track record
-    # buys its way past. What is left is the ordinary case, and how much of it
-    # the system may handle alone is earned rather than fixed.
-    if triage["severity"] <= REVIEW.auto_post_max_severity:
-        return True, "low severity, fully grounded, commits nothing"
-    if triage["severity"] > AUTONOMY_MAX_SEVERITY:
-        return False, (f"severity {triage['severity']} is above {AUTONOMY_MAX_SEVERITY}, "
-                       f"where a person decides whatever the track record says")
-
-    category = triage.get("category", "general")
-    verdict = autonomy_for(f"reply.{category}")
-    if verdict.acts_without_a_person:
-        return True, (f"severity {triage['severity']}: reply.{category} is "
-                      f"{verdict.level.name.lower()} — {verdict.reason}")
-    return False, (f"severity {triage['severity']} above the fixed ceiling "
-                   f"{REVIEW.auto_post_max_severity}, and reply.{category} "
-                   f"has not earned it: {verdict.reason}")
+    _, allowed, reason = review_checks(state)
+    return allowed, reason
 
 
 # Severity above this is always a person's call. Autonomy widens what the
@@ -1223,33 +1273,48 @@ class EscalationDecision(BaseModel):
     suggested_channel: str = Field(default="webrtc", description="webrtc or exotel")
 
 
+def escalation_checks(state: GrievanceState) -> list[dict]:
+    """Each ESC-02 trigger, and whether it fired for this case.
+
+    One entry per rule, fired or not, so the console can show a reviewer the
+    triggers that did *not* apply as well: "why no call?" is answered by the
+    same list the node acts on.
+    """
+    triage = state["triage"]
+    text = state["complaint"]["text"]
+    severity = triage["severity"]
+    amount = _largest_rupee_amount(text)
+    pattern = state.get("pattern") or {}
+    verdict = state.get("verdict") or {}
+    rules = [
+        (f"severity ≥ {REVIEW.escalate_to_voice_min_severity}",
+         severity >= REVIEW.escalate_to_voice_min_severity,
+         f"severity {severity} (ESC-02)"),
+        ("account access or data privacy",
+         triage["category"] in ("account_access", "data_privacy"),
+         f"{triage['category']} always escalates (ESC-02)"),
+        ("disputed amount over ₹2,000",
+         bool(amount and amount > 2000),
+         f"disputed amount ₹{amount or 0:,.0f} exceeds ₹2,000 (ESC-02)"),
+        ("customer asked to talk",
+         bool(re.search(r"\b(call me|baat kar|phone|speak to|talk to someone)\b", text, re.I)),
+         "customer explicitly asked to speak to someone (ESC-02)"),
+        # A verified customer caught in a live incident gets the call, whatever
+        # their individual severity says. Their problem is not small; it is early.
+        ("confirmed customer in a crisis",
+         pattern.get("level") == "crisis" and verdict.get("author_class") == "customer",
+         f"crisis cluster of {pattern.get('cluster_size')} and a confirmed customer"),
+    ]
+    return [{"rule": rule, "fired": fired, "detail": detail} for rule, fired, detail in rules]
+
+
 async def escalation_node(state: GrievanceState) -> dict:
     """Apply clause ESC-02 rather than asking a model to remember it.
 
     The escalation triggers are written down and enumerable, so they are code.
     A model is not more accurate here, only more expensive and less auditable.
     """
-    triage = state["triage"]
-    text = state["complaint"]["text"]
-    reasons = []
-
-    if triage["severity"] >= REVIEW.escalate_to_voice_min_severity:
-        reasons.append(f"severity {triage['severity']} (ESC-02)")
-    if triage["category"] in ("account_access", "data_privacy"):
-        reasons.append(f"{triage['category']} always escalates (ESC-02)")
-    amount = _largest_rupee_amount(text)
-    if amount and amount > 2000:
-        reasons.append(f"disputed amount ₹{amount:,.0f} exceeds ₹2,000 (ESC-02)")
-    if re.search(r"\b(call me|baat kar|phone|speak to|talk to someone)\b", text, re.I):
-        reasons.append("customer explicitly asked to speak to someone (ESC-02)")
-
-    # A verified customer caught in a live incident gets the call, whatever
-    # their individual severity says. Their problem is not small; it is early.
-    pattern = state.get("pattern") or {}
-    verdict = state.get("verdict") or {}
-    if pattern.get("level") == "crisis" and verdict.get("author_class") == "customer":
-        reasons.append(f"crisis cluster of {pattern.get('cluster_size')} and a confirmed customer")
-
+    reasons = [c["detail"] for c in escalation_checks(state) if c["fired"]]
     needed = bool(reasons)
     return {
         "escalation": {

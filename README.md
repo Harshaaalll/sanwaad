@@ -253,15 +253,15 @@ python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
 python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
-pytest tests/ -q                           # 386 tests, no API key
+pytest tests/ -q                           # 403 tests, no API key
 ```
 
 ### Choosing the triage model
 
 Triage is the one model call every comment pays for. `triage_compare` scores
 each backend against complaints you have labelled: accuracy, macro-F1, recall
-per category, a confusion matrix, calibration, latency and cost. `GET /api/evals/triage`
-serves the result.
+per category, a confusion matrix, calibration, latency and cost. The console's
+**Model comparison** tab shows the result.
 
 ```bash
 pip install -r requirements-models.txt     # only for Laya: CPU torch + ~1.3 GB checkpoint
@@ -341,7 +341,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            386 tests
+tests/            403 tests
 ```
 
 ---

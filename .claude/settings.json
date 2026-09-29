@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py\" post-edit",
+            "timeout": 300,
+            "statusMessage": "Quick check: ruff + related tests"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate.py\" stop",
+            "timeout": 1200,
+            "statusMessage": "Test gate: ruff + full pytest"
+          }
+        ]
+      }
+    ]
+  }
+}

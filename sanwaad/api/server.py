@@ -256,6 +256,13 @@ async def api_case(case_id: str):
     case = await get_case(case_id)
     if not case:
         raise HTTPException(404, "no such case")
+    from sanwaad.explain import explain
+
+    try:
+        case["explain"] = explain(case["state"], case.get("pending"))
+    except Exception as exc:     # an explanation must never cost the reviewer the case
+        logger.warning(f"explain failed for {case_id}: {type(exc).__name__}: {exc}")
+        case["explain"] = None
     return case
 
 
@@ -313,6 +320,55 @@ def _thin(state: dict) -> dict:
 @app.get("/api/policy/search")
 async def api_policy_search(q: str, k: int = 5):
     return {"results": [c.model_dump() for c in get_store().search(q, k=k)]}
+
+
+# ---------------------------------------------------------------------------
+# Overview and policy — the operator's views
+# ---------------------------------------------------------------------------
+
+@app.get("/api/overview")
+async def api_overview():
+    from sanwaad.overview import summarise
+
+    return summarise(await list_cases(), dead_letters=len(DELIVERY.dead()),
+                     autonomy=AUTONOMY.report())
+
+
+@app.get("/api/settings")
+async def api_settings():
+    """Every threshold that decides a case's state, read from the live objects.
+
+    Read-only by design: these decide what goes out without a person, so they
+    change through code review and a deploy, not a form.
+    """
+    from dataclasses import fields
+
+    from sanwaad import config
+    from sanwaad.graph.nodes import AUTONOMY_MAX_SEVERITY
+    from sanwaad.limits import CALLS as calls_pool
+
+    def policy(obj) -> dict:
+        return {"doc": " ".join((type(obj).__doc__ or "").split()),
+                "values": {f.name: getattr(obj, f.name) for f in fields(obj)}}
+
+    return {
+        "policies": {
+            "Review — when a reply may post without a person": policy(config.REVIEW),
+            "Judge — reading the author": policy(config.JUDGE),
+            "Crisis — when complaints become an incident": policy(config.CRISIS),
+            "Actions — limits on what the executor may do": policy(config.ACTIONS),
+        },
+        "fixed": {
+            "autonomy_max_severity": AUTONOMY_MAX_SEVERITY,
+            "max_case_cost_inr": config.MAX_CASE_COST_INR,
+            "concurrent_cases": CASES.limit,
+            "concurrent_calls": calls_pool.limit,
+        },
+        "models": {"triage": config.TIER_TRIAGE, "draft": config.TIER_DRAFT,
+                   "reasoning": config.TIER_REASONING, "embeddings": config.EMBED_MODEL,
+                   "triage_backend": triage_status()["live"]},
+        "where": "sanwaad/config.py (policies), environment variables in .env.example",
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -187,5 +187,10 @@ async def list_cases() -> list[dict]:
                 "closure": values.get("closure"),
                 "escalation": values.get("escalation"),
                 "draft": values.get("draft"),
+                # For the overview: what a case has cost so far, open or not,
+                # and when the pipeline first saw it.
+                "cost_inr": round(sum(float(c.get("inr", 0.0))
+                                      for c in values.get("costs") or []), 6),
+                "opened_at": ((values.get("events") or [{}])[0]).get("at"),
             }
     return list(seen.values())
