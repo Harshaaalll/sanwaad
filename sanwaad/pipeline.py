@@ -8,10 +8,12 @@ ordinary path rather than an architectural problem.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
+import aiosqlite
 from langgraph.types import Command
 
 from .config import CHECKPOINT_PATH
@@ -24,26 +26,80 @@ def new_case_id() -> str:
     return f"case_{uuid.uuid4().hex[:10]}"
 
 
-@asynccontextmanager
-async def _session():
-    """A checkpointer session, in WAL mode.
+# One checkpointer per (event loop, database file), shared by every case.
+_SAVERS: dict[tuple[int, str], Any] = {}
+_SAVERS_LOCK: dict[int, asyncio.Lock] = {}
 
-    Each call opens its own connection, and ingest now runs cases concurrently,
-    so several of them write this file at once. SQLite's default rollback
-    journal locks the whole database for a write, and a checkpoint that waits
-    past the busy timeout raises "database is locked" — which the ingest path
-    catches and turns into a delivery-log failure. A bounded-concurrency change
-    would have been manufacturing dead letters under exactly the burst it was
-    added to survive. WAL lets readers and one writer proceed together, and the
-    busy timeout makes a contended write wait rather than fail.
+
+async def _shared_saver():
+    """The process's one connection to the checkpoint database.
+
+    This used to open a connection per call. Ingest runs cases concurrently, so
+    that meant several connections writing one file, and WAL plus a busy
+    timeout was supposed to make them queue. It did not, entirely: under WAL, a
+    connection whose read snapshot is older than another connection's commit
+    gets "database is locked" *immediately* when it tries to write — SQLite
+    cannot wait its way out of a stale snapshot, so the busy timeout never
+    applies. Four concurrent cases lost one in forty-five that way, each turned
+    into a delivery failure a person had to requeue.
+
+    One shared connection has no second writer to conflict with: the saver's
+    own lock serialises its statements, which take milliseconds against a model
+    call that takes seconds. The busy timeout stays for the other process that
+    can open this file — the listener — which is the case it does cover.
+
+    Keyed by event loop because the saver binds to the loop that made it, and
+    by path so a test that points CHECKPOINT_PATH elsewhere gets its own.
     """
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_PATH)) as saver:
-        await saver.conn.execute("PRAGMA journal_mode=WAL")
-        await saver.conn.execute("PRAGMA busy_timeout=5000")
-        yield build_graph(checkpointer=saver), saver
+    loop = asyncio.get_running_loop()
+    key = (id(loop), str(CHECKPOINT_PATH))
+    saver = _SAVERS.get(key)
+    if saver is not None and saver.loop is loop:
+        return saver
+    lock = _SAVERS_LOCK.setdefault(id(loop), asyncio.Lock())
+    async with lock:
+        saver = _SAVERS.get(key)
+        if saver is not None and saver.loop is loop:
+            return saver
+        CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = aiosqlite.connect(str(CHECKPOINT_PATH))
+        # aiosqlite's worker thread is not a daemon, and a shared connection
+        # outlives any one call, so every CLI that ran a case — the demo, the
+        # evals, the listener — finished its work and then never exited,
+        # waiting on a thread nobody would stop. The server closes it on
+        # shutdown; a daemon thread covers everything else. Nothing is lost by
+        # it: every write is awaited before a caller moves on, and WAL makes an
+        # interrupted transaction roll back rather than corrupt the file.
+        thread = getattr(conn, "_thread", None)
+        if thread is not None:
+            thread.daemon = True
+        conn = await conn
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA busy_timeout=5000")
+        saver = AsyncSqliteSaver(conn)
+        _SAVERS[key] = saver
+        return saver
+
+
+async def close_sessions() -> None:
+    """Close this loop's checkpoint connections. Called on server shutdown."""
+    loop_id = id(asyncio.get_running_loop())
+    for key in [k for k in _SAVERS if k[0] == loop_id]:
+        saver = _SAVERS.pop(key)
+        try:
+            await saver.conn.close()
+        except Exception:
+            pass
+    _SAVERS_LOCK.pop(loop_id, None)
+
+
+@asynccontextmanager
+async def _session():
+    """A graph wired to the shared checkpointer."""
+    saver = await _shared_saver()
+    yield build_graph(checkpointer=saver), saver
 
 
 def _config(case_id: str) -> dict:

@@ -32,6 +32,7 @@ from sanwaad.limits import CALLS, CASES  # noqa: E402
 from sanwaad.limits import report as pool_report  # noqa: E402
 from sanwaad.models import Citation, Complaint  # noqa: E402
 from sanwaad.pipeline import (  # noqa: E402
+    close_sessions,
     get_case,
     list_cases,
     resume_case,
@@ -75,6 +76,7 @@ async def _lifespan(_app: FastAPI):
         yield
     finally:
         warm.cancel()
+        await close_sessions()
 
 
 app = FastAPI(title="Sanwaad", version="0.1.0", lifespan=_lifespan)
