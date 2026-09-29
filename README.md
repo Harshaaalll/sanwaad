@@ -253,7 +253,7 @@ python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
 python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
-pytest tests/ -q                           # 403 tests, no API key
+pytest tests/ -q                           # 404 tests, no API key
 ```
 
 ### Choosing the triage model
@@ -341,7 +341,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            403 tests
+tests/            404 tests
 ```
 
 ---

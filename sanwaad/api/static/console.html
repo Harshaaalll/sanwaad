@@ -599,7 +599,8 @@ async function loadOverview() {
       ${kpi("Posted without a person", r.auto_rate == null ? "—" : pct(r.auto_rate),
             `${r.auto} auto · ${r.human} human (${r.approved_unchanged} approved as drafted, ${r.edited} edited, ${r.rejected} rejected)`)}
       ${kpi("Model cost per closed case", c.avg_per_closed_case_inr == null ? "—" : `₹${num(c.avg_per_closed_case_inr, 4)}`,
-            `vs ~₹${c.human_reply_inr} for a person to write the reply · ₹${num(c.total_inr, 4)} spent in all`)}
+            c.total_inr === 0 ? "₹0 because models ran offline (no API key): these are stubs, not real costs"
+              : `vs ~₹${c.human_reply_inr} for a person to write the reply · ₹${num(c.total_inr, 4)} spent in all`)}
     </div>
 
     ${o.incidents.length || o.dead_letters ? `<div class="card"><h3>Needs attention</h3>

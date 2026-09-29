@@ -348,7 +348,8 @@ async def api_settings():
     from sanwaad.limits import CALLS as calls_pool
 
     def policy(obj) -> dict:
-        return {"doc": " ".join((type(obj).__doc__ or "").split()),
+        # Docstrings use *emphasis*; the page renders plain text.
+        return {"doc": " ".join((type(obj).__doc__ or "").replace("*", "").split()),
                 "values": {f.name: getattr(obj, f.name) for f in fields(obj)}}
 
     return {

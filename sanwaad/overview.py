@@ -23,14 +23,27 @@ def status_of(case: dict) -> str:
     return "in_progress"
 
 
+def _human_decision(case: dict) -> str:
+    review = case["review"]
+    if review.get("decision") in ("reject", "edit"):
+        return review["decision"]
+    drafted = ((case.get("draft") or {}).get("text") or "").strip()
+    sent = (review.get("final_text") or "").strip()
+    return "approve" if sent == drafted else "edit"
+
+
 def summarise(cases: list[dict], *, dead_letters: int = 0,
               autonomy: list[dict] | None = None) -> dict:
     statuses = Counter(status_of(c) for c in cases)
     triages = [c.get("triage") or {} for c in cases]
     reviews = [c["review"] for c in cases if c.get("review")]
     auto = sum(1 for r in reviews if r.get("auto"))
-    human = [r for r in reviews if not r.get("auto")]
-    decisions = Counter(r.get("decision") for r in human)
+    human = [c for c in cases if c.get("review") and not c["review"].get("auto")]
+    # "As drafted" is judged on the text, as the autonomy ledger judges it: an
+    # approval that went out with changed words is an edit, whatever the
+    # button was called. Counting labels reported 28 approved as drafted for a
+    # queue where two replies had been rewritten.
+    decisions = Counter(_human_decision(c) for c in human)
     closed = [c for c in cases if c.get("closure")]
     closed_costs = [float(c["closure"].get("total_cost_inr", 0.0)) for c in closed]
     degraded = sum(1 for c in closed if c["closure"].get("degraded_steps"))

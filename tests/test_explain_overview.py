@@ -117,6 +117,15 @@ def test_status_follows_the_case_through_the_pipeline():
     assert status_of(_case(closure={"resolved": False})) == "closed_unresolved"
 
 
+def test_an_approval_with_rewritten_text_counts_as_an_edit():
+    cases = [_case(draft={"text": "Sorry about this."},
+                   review={"auto": False, "decision": "approve", "final_text": "Sorry — refunded."}),
+             _case(draft={"text": "Sorry about this."},
+                   review={"auto": False, "decision": "approve", "final_text": " Sorry about this. "})]
+    r = summarise(cases)["reviews"]
+    assert (r["approved_unchanged"], r["edited"]) == (1, 1)
+
+
 def test_overview_counts_are_traceable_to_cases():
     cases = [
         _case(draft={}, review={"auto": True}, closure={"resolved": True, "total_cost_inr": 0.02},
