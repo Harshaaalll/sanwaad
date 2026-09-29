@@ -58,7 +58,12 @@
      failing, a queue that is full, an item that gave up — is invisible in a
      case list, because a case list only shows what worked. */
   #health { margin-left:auto; display:flex; gap:6px; align-items:center; }
-  #health .pill { margin:0; cursor:default; }
+  /* A long status message must not squeeze the tabs and the health strip. */
+  #status { min-width:0; max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+            display:flex; gap:6px; align-items:center; }
+  .tabs button, header > button { white-space:nowrap; flex:none; }
+  #health .pill { margin:0; cursor:default; white-space:nowrap; }
+  h1 { white-space:nowrap; }
   #health .pill.bad { color:var(--bad); border-color:var(--bad); }
   #health .pill.warn { color:var(--warn); border-color:var(--warn); }
   /* Views */
@@ -104,6 +109,8 @@
   .hbar { display:grid; grid-template-columns:130px 1fr 40px; gap:8px; align-items:center; font-size:12px; margin:3px 0; }
   .hbar div { height:10px; background:var(--accent); border-radius:3px; min-width:2px; }
   .hbar span:last-child { font-family:var(--mono); text-align:right; color:var(--dim); }
+  input:not([type=checkbox]) { background:var(--bg); color:var(--fg); border:1px solid var(--line);
+          border-radius:6px; padding:6px 9px; font:inherit; font-size:13px; }
   select { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px 8px; font:inherit; font-size:12px; }
 </style>
 </head>
@@ -631,18 +638,60 @@ async function loadOverview() {
 // Policy — the thresholds, read from the live objects
 // ---------------------------------------------------------------------------
 
+// Kept in memory only: a reload forgets the token, which is the point.
+const pol = {token: "", actor: "", editing: null, previewed: null, data: null};
+
 async function loadPolicy() {
   health();
   const el = document.getElementById("view-policy");
   let p;
   try { p = await (await fetch("/api/settings")).json(); }
   catch { el.innerHTML = '<p class="muted">Could not reach /api/settings.</p>'; return; }
+  pol.data = p;
   const table = obj => `<table class="t">${Object.entries(obj).map(([k, v]) =>
     `<tr><td>${esc(k.replaceAll("_", " "))}</td><td>${esc(typeof v === "number" ? v.toLocaleString() : v)}</td></tr>`).join("")}</table>`;
+  const key = e => `${e.policy}.${e.field}`;
+  const current = Object.fromEntries(p.editable.map(e => [key(e), e.value]));
   el.innerHTML = `
     <h2>Policy</h2>
     <p class="muted" style="margin:0 0 16px">Every threshold that decides a case's state, as the running server has it.
-      Read-only: these change through <code>${esc(p.where)}</code> and a restart.</p>
+      Code defaults live in <code>${esc(p.where)}</code>.</p>
+
+    <div class="card"><h3>Change a threshold</h3>
+      ${p.editing_enabled ? `
+        <div class="row">
+          <input id="pol-token" type="password" placeholder="admin token" value="${esc(pol.token)}"
+            oninput="pol.token=this.value" style="width:200px">
+          <input id="pol-actor" placeholder="your name" value="${esc(pol.actor)}"
+            oninput="pol.actor=this.value" style="width:200px">
+        </div>
+        <p class="note">Each change needs a reason, is checked against hard bounds, and is logged before it takes
+          effect. Preview its impact first; Apply appears once you have.</p>`
+        : `<p style="margin:0">Editing is <b>off</b>. Set <code>SANWAAD_ADMIN_TOKEN</code> on the server to enable it.
+          Values below are still what the server uses.</p>`}
+      <table class="t" style="margin-top:10px">
+        <tr><th>threshold</th><th>now</th><th>shipped default</th><th>allowed</th><th></th></tr>
+        ${p.editable.map(e => `
+          <tr><td title="${esc(e.note)}">${esc(e.policy)} · ${esc(e.field.replaceAll("_", " "))}</td>
+            <td class="${e.value !== e.default ? 'poor' : ''}">${esc(e.value)}</td>
+            <td>${esc(e.default)}</td><td>${e.low}–${e.high}</td>
+            <td>${p.editing_enabled ? `<button onclick="editPolicy('${e.policy}','${e.field}')">Change</button>` : ""}</td></tr>
+          ${pol.editing === key(e) ? `<tr><td colspan="5" style="text-align:left">${policyForm(e)}</td></tr>` : ""}`).join("")}
+      </table>
+      <p class="note">Not editable here, by design: the grounding requirement, the ban on auto-promised compensation,
+        and the autonomy maximum. The reversal ceiling can only be lowered from its code default, never
+        raised. Those change through code review.</p>
+    </div>
+
+    ${p.history.length ? `<div class="card"><h3>Change history</h3>
+      <table class="t"><tr><th>when</th><th>who</th><th>threshold</th><th>change</th><th>reason</th><th></th></tr>
+      ${p.history.map(h => `<tr><td>${esc(new Date(h.at).toLocaleString())}</td><td>${esc(h.actor)}</td>
+        <td>${esc(h.policy)}.${esc(h.field)}</td><td>${esc(h.old)} → ${esc(h.new)}${h.reverts ? " (revert)" : ""}</td>
+        <td style="text-align:left">${esc(h.reason)}</td>
+        <td>${p.editing_enabled && current[`${h.policy}.${h.field}`] === h.new && !h.reverts
+          ? `<button onclick="revertPolicy('${esc(h.id)}')">Revert</button>` : ""}</td></tr>`).join("")}
+      </table></div>` : ""}
+
     <div class="grid">
       ${Object.entries(p.policies).map(([name, pol]) => `<div class="card"><h3>${esc(name)}</h3>
         ${table(pol.values)}<p class="note">${esc(pol.doc)}</p></div>`).join("")}
@@ -650,6 +699,82 @@ async function loadPolicy() {
         <p class="note">Severity above the autonomy maximum always goes to a person, however good the track record.</p></div>
       <div class="card"><h3>Models</h3>${table(p.models)}</div>
     </div>`;
+}
+
+function policyForm(e) {
+  const pv = pol.previewed;
+  const ready = pv && pv.key === `${e.policy}.${e.field}`;
+  return `<div style="padding:8px 0">
+    <div class="row">
+      <input id="pol-value" value="${esc(ready ? pv.value : e.value)}" style="width:110px"
+        oninput="pol.previewed=null; document.getElementById('pol-apply')?.remove()">
+      <input id="pol-reason" placeholder="why (required)" style="flex:1; min-width:260px">
+      <button onclick="previewPolicy('${e.policy}','${e.field}')">Preview impact</button>
+      ${ready ? `<button id="pol-apply" class="primary" onclick="applyPolicy('${e.policy}','${e.field}')">Apply ${esc(pv.value)}</button>` : ""}
+      <button onclick="pol.editing=null; pol.previewed=null; loadPolicy()">Cancel</button>
+    </div>
+    <p class="note">Allowed ${e.low}–${e.high}${e.note ? ` · ${esc(e.note)}` : ""}</p>
+    <div id="pol-preview">${ready ? previewHtml(pv.result) : ""}</div>
+  </div>`;
+}
+
+function previewHtml(r) {
+  if (!r.available) return `<p class="note" style="color:var(--warn)">No preview: ${esc(r.why)}.</p>`;
+  return `<p style="margin:6px 0">Would decide <b>${r.changed}</b> of ${r.checked} stored cases differently.</p>
+    ${r.examples.length ? `<table class="t"><tr><th>case</th><th>category</th><th>severity</th><th>now</th><th>with change</th></tr>
+      ${r.examples.map(x => `<tr><td>${esc(x.case_id)}</td><td>${esc(x.category)}</td><td>${esc(x.severity)}</td>
+        <td>${esc(x.before)}</td><td>${esc(x.after)}</td></tr>`).join("")}</table>` : ""}
+    <p class="note">${esc(r.note)}</p>`;
+}
+
+function editPolicy(policy, field) {
+  pol.editing = `${policy}.${field}`; pol.previewed = null; loadPolicy();
+}
+
+async function postPolicy(url, body, admin) {
+  const headers = {"Content-Type": "application/json"};
+  if (admin) headers["X-Admin-Token"] = pol.token;
+  const r = await fetch(url, {method: "POST", headers, body: JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+  return d;
+}
+
+async function previewPolicy(policy, field) {
+  const value = document.getElementById("pol-value").value;
+  const reason = document.getElementById("pol-reason").value;
+  try {
+    const result = await postPolicy("/api/settings/preview", {policy, field, value});
+    pol.previewed = {key: `${policy}.${field}`, value: result.value ?? value, result};
+    await loadPolicy();
+    document.getElementById("pol-reason").value = reason;     // survive the re-render
+  } catch (e) { status(`preview refused: ${e.message}`); }
+}
+
+async function applyPolicy(policy, field) {
+  const reason = document.getElementById("pol-reason").value;
+  try {
+    const d = await postPolicy("/api/settings/change",
+      {policy, field, value: pol.previewed.value, reason, actor: pol.actor}, true);
+    status(`${policy}.${field}: ${d.old} → ${d.new}`);
+    pol.editing = null; pol.previewed = null; loadPolicy();
+  } catch (e) { status(`change refused: ${e.message}`); }
+}
+
+function revertPolicy(id) {
+  // An inline reason field in the header, not a browser prompt(): a revert is
+  // a change like any other and needs its reason recorded.
+  const box = document.getElementById("status");
+  box.innerHTML = `<input id="pol-revert-reason" placeholder="why revert (required)" style="width:260px">
+    <button id="pol-revert-go">Confirm revert</button>`;
+  document.getElementById("pol-revert-go").onclick = async () => {
+    try {
+      const d = await postPolicy("/api/settings/revert", {change_id: id, actor: pol.actor,
+        reason: document.getElementById("pol-revert-reason").value}, true);
+      status(`reverted: ${d.policy}.${d.field} back to ${d.new}`); loadPolicy();
+    } catch (e) { status(`revert refused: ${e.message}`); }
+  };
+  document.getElementById("pol-revert-reason").focus();
 }
 
 function confusion(b) {

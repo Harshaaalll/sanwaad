@@ -493,7 +493,7 @@ async def judge_node(state: GrievanceState) -> dict:
 _PATTERN_WEIGHT = {"none": 0.0, "watch": 15.0, "crisis": 40.0}
 
 
-def prioritise(triage: dict, verdict: dict, pattern: dict) -> Priority:
+def prioritise(triage: dict, verdict: dict, pattern: dict, judge=None) -> Priority:
     """How urgent is this, and is it worth drafting for at all?
 
     Severity says how bad it is for one person, the verdict says whose voice it
@@ -502,6 +502,7 @@ def prioritise(triage: dict, verdict: dict, pattern: dict) -> Priority:
     outage arrives as forty separate tickets; by reach alone the loudest
     account outranks the person who actually lost money.
     """
+    judge = judge or JUDGE         # a candidate policy when previewing an edit
     reasons: list[str] = []
     level = pattern.get("level", "none")
     severity = int(triage.get("severity", 1))
@@ -542,12 +543,12 @@ def prioritise(triage: dict, verdict: dict, pattern: dict) -> Priority:
         reasons.append("not a complaint")
         return _priority("ignore", False)
 
-    if severity >= 4 or level == "watch" or reach >= JUDGE.reply_worthy_reach:
+    if severity >= 4 or level == "watch" or reach >= judge.reply_worthy_reach:
         if severity >= 4:
             reasons.append(f"severity {severity}")
         if level == "watch":
             reasons.append(f"{pattern.get('cluster_size')} similar in the last hour")
-        if reach >= JUDGE.reply_worthy_reach:
+        if reach >= judge.reply_worthy_reach:
             reasons.append(f"audience of {reach:,}")
         return _priority("priority", True)
 
@@ -949,7 +950,7 @@ async def plan_node(state: GrievanceState) -> dict:
 # Review gate
 # ---------------------------------------------------------------------------
 
-def review_checks(state: GrievanceState) -> tuple[list[dict], bool, str]:
+def review_checks(state: GrievanceState, review=None) -> tuple[list[dict], bool, str]:
     """Every rule the review gate applies to this case, and what it decided.
 
     Returns (checks, allowed, reason). Each check is {rule, passed, detail,
@@ -958,6 +959,7 @@ def review_checks(state: GrievanceState) -> tuple[list[dict], bool, str]:
     The gate itself is derived from this list, so the explanation a reviewer
     reads in the console and the decision the gate made cannot drift apart.
     """
+    review = review or REVIEW      # a candidate policy when previewing an edit
     triage = state["triage"]
     draft = state["draft"]
     grounding = state.get("grounding") or {}
@@ -984,10 +986,10 @@ def review_checks(state: GrievanceState) -> tuple[list[dict], bool, str]:
          not blocking,
          f"guardrail block: {[g['rule'] for g in blocking]}"),
         ("promises no compensation",
-         not (REVIEW.forbid_auto_compensation and draft.get("promises_compensation")),
+         not (review.forbid_auto_compensation and draft.get("promises_compensation")),
          "draft commits money; clause RFD-05 requires approval"),
         ("every claim grounded",
-         not (REVIEW.require_grounded and not grounding.get("grounded")),
+         not (review.require_grounded and not grounding.get("grounded")),
          "draft contains unsupported claims"),
         ("needs no private data",
          not triage.get("needs_private_data"),
@@ -1003,9 +1005,9 @@ def review_checks(state: GrievanceState) -> tuple[list[dict], bool, str]:
     # buys its way past. What is left is the ordinary case, and how much of it
     # the system may handle alone is earned rather than fixed.
     severity = triage["severity"]
-    if severity <= REVIEW.auto_post_max_severity:
+    if severity <= review.auto_post_max_severity:
         reason = "low severity, fully grounded, commits nothing"
-        checks.append({"rule": f"severity ≤ {REVIEW.auto_post_max_severity} posts on its own",
+        checks.append({"rule": f"severity ≤ {review.auto_post_max_severity} posts on its own",
                        "passed": True, "detail": reason, "kind": "severity"})
         return checks, True, reason
     if severity > AUTONOMY_MAX_SEVERITY:
@@ -1022,7 +1024,7 @@ def review_checks(state: GrievanceState) -> tuple[list[dict], bool, str]:
                   f"{verdict.level.name.lower()} — {verdict.reason}")
     else:
         reason = (f"severity {severity} above the fixed ceiling "
-                  f"{REVIEW.auto_post_max_severity}, and reply.{category} "
+                  f"{review.auto_post_max_severity}, and reply.{category} "
                   f"has not earned it: {verdict.reason}")
     checks.append({"rule": f"reply.{category} has earned autonomy",
                    "passed": verdict.acts_without_a_person,
@@ -1273,13 +1275,14 @@ class EscalationDecision(BaseModel):
     suggested_channel: str = Field(default="webrtc", description="webrtc or exotel")
 
 
-def escalation_checks(state: GrievanceState) -> list[dict]:
+def escalation_checks(state: GrievanceState, review=None) -> list[dict]:
     """Each ESC-02 trigger, and whether it fired for this case.
 
     One entry per rule, fired or not, so the console can show a reviewer the
     triggers that did *not* apply as well: "why no call?" is answered by the
     same list the node acts on.
     """
+    review = review or REVIEW      # a candidate policy when previewing an edit
     triage = state["triage"]
     text = state["complaint"]["text"]
     severity = triage["severity"]
@@ -1287,8 +1290,8 @@ def escalation_checks(state: GrievanceState) -> list[dict]:
     pattern = state.get("pattern") or {}
     verdict = state.get("verdict") or {}
     rules = [
-        (f"severity ≥ {REVIEW.escalate_to_voice_min_severity}",
-         severity >= REVIEW.escalate_to_voice_min_severity,
+        (f"severity ≥ {review.escalate_to_voice_min_severity}",
+         severity >= review.escalate_to_voice_min_severity,
          f"severity {severity} (ESC-02)"),
         ("account access or data privacy",
          triage["category"] in ("account_access", "data_privacy"),

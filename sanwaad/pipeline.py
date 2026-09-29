@@ -165,6 +165,26 @@ async def get_case(case_id: str) -> Optional[dict]:
     }
 
 
+async def case_states(limit: int = 500) -> list[dict]:
+    """The latest full state of up to `limit` cases, newest first.
+
+    For replaying a decision under a candidate policy, which needs what the
+    deciding function saw (draft, grounding, actions), not the list's summary.
+    """
+    async with _session() as (_, saver):
+        seen: dict[str, dict] = {}
+        async for cp in saver.alist(None):
+            tid = cp.config["configurable"]["thread_id"]
+            if tid in seen:
+                continue
+            values = cp.checkpoint.get("channel_values", {}) or {}
+            if values.get("complaint"):
+                seen[tid] = {**values, "case_id": tid}
+                if len(seen) >= limit:
+                    break
+    return list(seen.values())
+
+
 async def list_cases() -> list[dict]:
     """Every case the checkpointer knows about, newest first."""
     async with _session() as (graph, saver):

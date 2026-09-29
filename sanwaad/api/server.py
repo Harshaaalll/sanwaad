@@ -7,6 +7,7 @@ other local services during a demo.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import sys
@@ -16,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
@@ -26,6 +27,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from sanwaad import policy_store  # noqa: E402
 from sanwaad.autonomy import LEDGER as AUTONOMY  # noqa: E402
 from sanwaad.connectors import get_connector  # noqa: E402
 from sanwaad.delivery import DEAD, DELIVERY  # noqa: E402
@@ -33,6 +35,7 @@ from sanwaad.limits import CALLS, CASES  # noqa: E402
 from sanwaad.limits import report as pool_report  # noqa: E402
 from sanwaad.models import Citation, Complaint  # noqa: E402
 from sanwaad.pipeline import (  # noqa: E402
+    case_states,
     close_sessions,
     get_case,
     list_cases,
@@ -73,6 +76,10 @@ async def _warm_index() -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    # Policy changes made through the console survive a restart: replay them
+    # before the first case is decided.
+    for problem in policy_store.replay():
+        logger.error(f"policy override skipped, default kept: {problem}")
     warm = asyncio.create_task(_warm_index())
     try:
         yield
@@ -369,7 +376,70 @@ async def api_settings():
                    "reasoning": config.TIER_REASONING, "embeddings": config.EMBED_MODEL,
                    "triage_backend": triage_status()["live"]},
         "where": "sanwaad/config.py (policies), environment variables in .env.example",
+        "editable": policy_store.describe(),
+        "editing_enabled": bool(os.getenv("SANWAAD_ADMIN_TOKEN")),
+        "history": list(reversed(policy_store.history()))[:50],
     }
+
+
+def _require_admin(token: Optional[str]) -> None:
+    """Policy edits need the admin token. With none configured, editing is off.
+
+    The console has no login, so this is the only thing between anyone who can
+    open it and a looser auto-post rule.
+    """
+    expected = os.getenv("SANWAAD_ADMIN_TOKEN")
+    if not expected:
+        raise HTTPException(403, "policy editing is disabled: set SANWAAD_ADMIN_TOKEN to enable it")
+    if not token or not hmac.compare_digest(token.encode(), expected.encode()):
+        raise HTTPException(401, "wrong or missing admin token")
+
+
+class PolicyChange(BaseModel):
+    policy: str
+    field: str
+    value: Any
+    reason: str = ""
+    actor: str = ""
+
+
+class PolicyRevert(BaseModel):
+    change_id: str
+    reason: str = ""
+    actor: str = ""
+
+
+@app.post("/api/settings/preview")
+async def api_settings_preview(req: PolicyChange):
+    """Read-only: which stored cases the candidate value would decide differently."""
+    try:
+        return policy_store.preview(req.policy, req.field, req.value, await case_states())
+    except policy_store.PolicyError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.post("/api/settings/change")
+async def api_settings_change(req: PolicyChange, x_admin_token: Optional[str] = Header(None)):
+    _require_admin(x_admin_token)
+    try:
+        entry = policy_store.apply(req.policy, req.field, req.value,
+                                   reason=req.reason, actor=req.actor)
+    except policy_store.PolicyError as exc:
+        raise HTTPException(400, str(exc)) from None
+    logger.warning(f"policy change {entry['id']}: {entry['policy']}.{entry['field']} "
+                   f"{entry['old']} -> {entry['new']} by {entry['actor']}: {entry['reason']}")
+    return entry
+
+
+@app.post("/api/settings/revert")
+async def api_settings_revert(req: PolicyRevert, x_admin_token: Optional[str] = Header(None)):
+    _require_admin(x_admin_token)
+    try:
+        entry = policy_store.revert(req.change_id, reason=req.reason, actor=req.actor)
+    except policy_store.PolicyError as exc:
+        raise HTTPException(400, str(exc)) from None
+    logger.warning(f"policy revert {entry['id']} of {req.change_id} by {entry['actor']}")
+    return entry
 
 
 # ---------------------------------------------------------------------------

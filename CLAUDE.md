@@ -22,6 +22,7 @@ tests after each Python edit, the full suite before a turn ends, and again on
 
 - `sanwaad/graph/nodes.py`: every pipeline step; `graph.py` wires the order.
 - `sanwaad/config.py`: every threshold (review, judge, crisis, action policy).
+- `sanwaad/policy_store.py`: the only place a policy may change at runtime (bounded, logged, revertible).
 - `sanwaad/pipeline.py`: run / resume / list cases over one shared SQLite checkpointer.
 - `sanwaad/triage_backends.py`: gemini | laya | jev triage behind one interface.
 - `sanwaad/api/server.py` + `api/static/console.html`: the review console (vanilla JS).

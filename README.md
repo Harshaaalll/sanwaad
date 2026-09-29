@@ -253,7 +253,7 @@ python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
 python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
-pytest tests/ -q                           # 404 tests, no API key
+pytest tests/ -q                           # 420 tests, no API key
 ```
 
 ### Choosing the triage model
@@ -276,6 +276,16 @@ front of live traffic with `SANWAAD_TRIAGE_BACKEND`. A decision model sets the
 labels, the triage tier writes the summary, and any comment it is unsure of
 (`SANWAAD_TRIAGE_MIN_CONFIDENCE`) goes to Gemini, with the reason on the case
 timeline.
+
+### Changing a policy threshold
+
+The console's **Policy** tab shows every threshold that decides a case's
+state. Set `SANWAAD_ADMIN_TOKEN` and thirteen of them become editable: each
+inside hard bounds, with a required reason, an impact preview against stored
+cases before Apply appears, and an append-only log (`sanwaad/data/policy_audit.jsonl`)
+that is replayed on start and supports one-click revert. The grounding rule,
+the ban on auto-promised compensation and the autonomy maximum are not
+editable there; the reversal ceiling can only be lowered.
 
 Or in Docker, where that download already happened at build time:
 
@@ -341,7 +351,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            404 tests
+tests/            420 tests
 ```
 
 ---
