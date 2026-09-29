@@ -1,0 +1,11 @@
+# Optional: local decision models for triage (SANWAAD_TRIAGE_BACKEND=laya) and
+# for `python -m sanwaad.evals.triage_compare`. Not needed for the default
+# Gemini triage.
+#
+#   pip install -r requirements-models.txt
+#
+# CPU wheels of torch: a GPU build is ~2 GB more and buys nothing on a host
+# without a GPU. Drop the index line if you have one.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.2
+laya==0.3.21

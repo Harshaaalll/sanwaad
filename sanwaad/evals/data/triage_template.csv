@@ -1,0 +1,13 @@
+id,channel,text,category
+mock-01,reddit,"NimbusPay se ₹4,500 transfer kiya tha 6 din pehle, paise beneficiary ko nahi mile aur mere account me bhi wapas nahi aaye. Support pe 3 baar likha, koi jawab nahi.",refund
+mock-02,reddit,"मेरा वॉलेट अचानक फ्रीज कर दिया गया, ₹18,000 अंदर पड़े हैं और ऐप कुछ बताता ही नहीं। कल मेरी बेटी की फीस भरनी है।",account_access
+mock-03,reddit,"Charged ₹15 on a ₹2,000 wallet-to-bank transfer even though I'm well under the 10k free limit this month. What is this charge for?",billing
+mock-04,reddit,"Been 40 days since my dispute. No resolution, no callback despite two promises. Filing with the RBI Ombudsman this week.",agent_behaviour
+mock-05,reddit,"Someone called claiming to be from NimbusPay and asked for the OTP to 'unblock' my account. They knew my last transaction amount. How did they get that?!",data_privacy
+mock-06,twitter,"@NimbusPay double debit for one Swiggy order — ₹640 taken twice. Please fix, this happened last month too.",refund
+mock-07,reddit,"Honestly the new UPI autopay flow is so much cleaner than before. Whoever redesigned it, well done.",praise
+mock-08,reddit,"NimbusPay is a SCAM, they hang the app on purpose just to make hype for their launch. BOYCOTT this app everyone.",off_topic
+mock-09,twitter,"App down again during peak hours?? Third time this month. Can't pay at the counter.",service_outage
+mock-10,reddit,"निंबस से पेमेंट फेल हो रहा है पिछले 20 मिनट से, ₹2,300 कट गए और दुकानदार कह रहा है नहीं आया।",service_outage
+mock-11,playstore,"Ordered the NimbusPay RuPay card 3 weeks ago, tracking still says dispatched. Where is it?",delivery
+mock-12,reddit,"Anyone know if NimbusPay works for paying electricity bills in Pune?",

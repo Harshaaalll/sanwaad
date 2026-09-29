@@ -6,6 +6,7 @@ import json
 import re
 from typing import Optional
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..caching import TRIAGE_CACHE
@@ -60,9 +61,138 @@ _REGULATORY_PATTERNS = re.compile(
 )
 
 
+_SUMMARY_SYSTEM = """You summarise inbound public comments for NimbusPay, an Indian UPI wallet.
+Another system has already classified the comment; you only write two fields.
+
+`summary` MUST be written in English regardless of the comment's language, in
+one sentence, naming the amount and timeframe if present. This summary is used
+verbatim as a retrieval query against an English policy index, so write it with
+the vocabulary a policy document would use.
+
+`language` is the BCP-47 tag of the language to REPLY in, mirroring the
+customer. Hinglish in Latin script is "hi-Latn"."""
+
+
+class TriageSummary(BaseModel):
+    """The two triage fields a decision model cannot produce."""
+
+    summary: str
+    language: str = "en"
+
+
+async def llm_triage(text: str, channel: str, *, spent_inr: float = 0.0,
+                     trace_id: Optional[str] = None,
+                     use_cache: bool = True) -> tuple[Triage, dict]:
+    """Generative triage: one structured call that writes every field.
+
+    `text` must already have been through `check_complaint`. The comparison
+    harness passes `use_cache=False`, because a cache hit is free and instant
+    and would report a latency and cost no real call has.
+    """
+    r = route("triage")
+    cached = TRIAGE_CACHE.get(r.model, text, namespace="triage") if use_cache else None
+    if cached is not None:
+        return Triage(**cached), {"stage": "triage", "model": "cache", "usd": 0.0, "inr": 0.0,
+                                  "prompt_tokens": 0, "output_tokens": 0, "attempts": 0}
+
+    # Minimal, isolated context: no author handle, no identifiers, and
+    # the comment fenced off as data rather than pasted in as prose.
+    result, cost = await structured(
+        model=r.model,
+        fallback_model=r.fallback,
+        system=with_trust_rules(_TRIAGE_SYSTEM),
+        user=(f"A public comment on {channel}:\n\n"
+              + untrusted("customer_comment", minimal_text(text))),
+        schema=Triage,
+        stage="triage",
+        offline_fallback=_offline_triage(text),
+        max_output_tokens=r.max_output_tokens,
+        timeout_s=r.timeout_s,
+        max_latency_ms=r.max_latency_ms,
+        spent_inr=spent_inr,
+        budget_inr=MAX_CASE_COST_INR,
+        trace_id=trace_id,
+    )
+    # Only a real answer is worth keeping. A degraded result is the
+    # keyword stub standing in for a model that could not run, and
+    # caching it lets a thirty-second provider blip go on answering for
+    # every similar complaint until the entry expires — an outage
+    # contaminating healthy traffic long after it ended, and arriving
+    # as a clean cache hit with nothing marked degraded about it.
+    if use_cache and not (cost.get("degraded") or cost.get("model") in NON_CALL_MODELS):
+        TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"), namespace="triage")
+    return result, cost
+
+
+async def _decision_triage(backend_name: str, text: str, channel: str, *,
+                           spent_inr: float, trace_id: str
+                           ) -> tuple[Optional[Triage], list[dict], str]:
+    """Triage with a decision model, or say why not.
+
+    Returns (triage, costs, note). A None triage means the caller falls back to
+    the generative path, and `note` is the reason, which goes on the timeline:
+    "why did Laya not triage this one" is the first question anyone comparing
+    backends asks.
+    """
+    from ..triage_backends import BackendUnavailable, get_backend, min_confidence
+
+    backend = get_backend(backend_name)
+    try:
+        labels = await backend.classify(text, channel)
+    except BackendUnavailable as exc:
+        return None, [], f"{backend_name} unavailable ({exc}); gemini triaged instead"
+    except Exception as exc:  # a broken local model must not stop the case
+        logger.warning(f"{backend_name} triage failed: {type(exc).__name__}: {exc}")
+        return None, [], f"{backend_name} failed ({type(exc).__name__}); gemini triaged instead"
+
+    floor = min_confidence()
+    if labels.confidence is not None and labels.confidence < floor:
+        return None, [labels.cost], (f"{backend_name} unsure of the category "
+                                     f"({labels.category} at {labels.confidence:.2f} < {floor:.2f}); "
+                                     "gemini triaged instead")
+
+    # Hybrid: labels from the decision model, words from the triage tier.
+    r = route("triage")
+    fallback = _offline_triage(text)
+    words, words_cost = await structured(
+        model=r.model,
+        fallback_model=r.fallback,
+        system=with_trust_rules(_SUMMARY_SYSTEM),
+        user=(f"A public comment on {channel}, classified as {labels.category}:\n\n"
+              + untrusted("customer_comment", minimal_text(text))),
+        schema=TriageSummary,
+        stage="triage_summary",
+        offline_fallback={
+            "summary": f"Customer reports an issue in the {labels.category} category: {text[:160]}",
+            "language": fallback["language"],
+        },
+        max_output_tokens=r.max_output_tokens,
+        timeout_s=r.timeout_s,
+        max_latency_ms=r.max_latency_ms,
+        spent_inr=spent_inr,
+        budget_inr=MAX_CASE_COST_INR,
+        trace_id=trace_id,
+    )
+    triage = Triage(
+        is_complaint=labels.is_complaint,
+        category=labels.category,
+        severity=labels.severity,
+        sentiment=labels.sentiment,
+        language=words.language,
+        summary=words.summary,
+        needs_private_data=labels.needs_private_data,
+    )
+    conf = f" at {labels.confidence:.2f}" if labels.confidence is not None else ""
+    return triage, [labels.cost, words_cost], f"labels by {labels.model}{conf}"
+
+
 async def triage_node(state: GrievanceState) -> dict:
+    from ..triage_backends import live_backend_name
+
     complaint = state["complaint"]
     text = complaint["text"]
+    backend = live_backend_name()
+    note = ""
 
     with TRACER.span("triage", trace_id=state["case_id"]) as span:
         # INPUT guardrail. The complaint is untrusted text that is about to be
@@ -70,49 +200,24 @@ async def triage_node(state: GrievanceState) -> dict:
         # the downstream router and the auto-post gate can both see it.
         text, input_violations = check_complaint(text)
         injection = [v.detail for v in input_violations if v.rule == "injection"]
+        span.set(backend=backend, injection=bool(injection))
 
-        r = route("triage")
-        span.set(model=r.model, injection=bool(injection))
-
-        cached = TRIAGE_CACHE.get(r.model, text, namespace="triage")
-        if cached is not None:
-            span.set(cache="hit")
-            result = Triage(**cached)
-            cost = {"stage": "triage", "model": "cache", "usd": 0.0, "inr": 0.0,
-                    "prompt_tokens": 0, "output_tokens": 0, "attempts": 0}
+        result, costs = None, []
+        if backend != "gemini":
+            result, costs, note = await _decision_triage(
+                backend, text, complaint["channel"],
+                spent_inr=_spent(state), trace_id=state["case_id"])
+        if result is None:
+            backend_used = "gemini"
+            result, cost = await llm_triage(text, complaint["channel"],
+                                            spent_inr=_spent(state),
+                                            trace_id=state["case_id"])
+            costs = costs + [cost]
+            span.set(model=cost.get("model"), cache="hit" if cost.get("model") == "cache" else "miss")
         else:
-            span.set(cache="miss")
-            fallback = _offline_triage(text)
-            # Minimal, isolated context: no author handle, no identifiers, and
-            # the comment fenced off as data rather than pasted in as prose.
-            result, cost = await structured(
-                model=r.model,
-                fallback_model=r.fallback,
-                system=with_trust_rules(_TRIAGE_SYSTEM),
-                user=(f"A public comment on {complaint['channel']}:\n\n"
-                      + untrusted("customer_comment", minimal_text(text))),
-                schema=Triage,
-                stage="triage",
-                offline_fallback=fallback,
-                max_output_tokens=r.max_output_tokens,
-                timeout_s=r.timeout_s,
-                max_latency_ms=r.max_latency_ms,
-                spent_inr=_spent(state),
-                budget_inr=MAX_CASE_COST_INR,
-                trace_id=state["case_id"],
-            )
-            # Only a real answer is worth keeping. A degraded result is the
-            # keyword stub standing in for a model that could not run, and
-            # caching it lets a thirty-second provider blip go on answering for
-            # every similar complaint until the entry expires — an outage
-            # contaminating healthy traffic long after it ended, and arriving
-            # as a clean cache hit with nothing marked degraded about it.
-            if cost.get("degraded") or cost.get("model") in NON_CALL_MODELS:
-                span.set(cache="not-stored", cache_skip_reason=cost.get("model"))
-            else:
-                TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"),
-                                 namespace="triage")
-        span.set(cost_inr=cost.get("inr", 0.0))
+            backend_used = backend
+        span.set(backend_used=backend_used,
+                 cost_inr=sum(c.get("inr", 0.0) for c in costs))
 
     # Deterministic override. A keyword match here outranks the model, because
     # a missed regulatory mention is a compliance incident and a false positive
@@ -121,15 +226,18 @@ async def triage_node(state: GrievanceState) -> dict:
     if regulatory and result.severity < 5:
         result.severity = 5
 
+    message = f"{result.category.value} / severity {result.severity} / {result.sentiment}"
+    if backend != "gemini":
+        message += f" — {note}"
     return {
         "triage": result.model_dump(mode="json"),
         "retrieval_query": result.summary,
         "injection_flagged": bool(injection),
-        "costs": [cost],
+        "costs": costs,
         "events": [event(
-            "triage",
-            f"{result.category.value} / severity {result.severity} / {result.sentiment}",
+            "triage", message,
             regulatory_flag=regulatory, injection=bool(injection),
+            backend=backend_used,
         )],
     }
 

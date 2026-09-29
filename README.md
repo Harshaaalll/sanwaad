@@ -252,8 +252,30 @@ python -m sanwaad.router                   # which model runs each step
 python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
-pytest tests/ -q                           # 361 tests, no API key
+python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
+pytest tests/ -q                           # 386 tests, no API key
 ```
+
+### Choosing the triage model
+
+Triage is the one model call every comment pays for. `triage_compare` scores
+each backend against complaints you have labelled: accuracy, macro-F1, recall
+per category, a confusion matrix, calibration, latency and cost. `GET /api/evals/triage`
+serves the result.
+
+```bash
+pip install -r requirements-models.txt     # only for Laya: CPU torch + ~1.3 GB checkpoint
+python -m sanwaad.evals.triage_compare --data your_complaints.csv
+```
+
+The CSV needs `text` and `category` (see `sanwaad/evals/data/triage_template.csv`).
+Backends: **gemini** (generative, the default), **laya** (open-weight decision
+model, runs locally, reports calibrated confidence) and **jev** (TypeSafe AI's
+hosted decision model; the adapter is waiting on API access). Put the winner in
+front of live traffic with `SANWAAD_TRIAGE_BACKEND`. A decision model sets the
+labels, the triage tier writes the summary, and any comment it is unsure of
+(`SANWAAD_TRIAGE_MIN_CONFIDENCE`) goes to Gemini, with the reason on the case
+timeline.
 
 Or in Docker, where that download already happened at build time:
 
@@ -314,12 +336,12 @@ sanwaad/
   handoff.py      agents propose a route; code grants or refuses it
   missions.py     declared workflows — the lead pipeline, on the same harness
   delivery.py     the dead-letter queue: what gave up, and why
-  evals/          golden set, retrieval, trajectory and loop evals, harness
+  evals/          golden set, retrieval, trajectory, loop and triage-model evals, harness
   voice/          the call brief, hotwords, spoken numbers, the WebRTC agent
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            361 tests
+tests/            386 tests
 ```
 
 ---

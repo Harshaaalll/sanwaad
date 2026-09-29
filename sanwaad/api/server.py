@@ -7,6 +7,7 @@ other local services during a demo.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -40,6 +41,7 @@ from sanwaad.pipeline import (  # noqa: E402
 )
 from sanwaad.rag.store import get_store  # noqa: E402
 from sanwaad.tools import REGISTRY  # noqa: E402
+from sanwaad.triage_backends import status as triage_status  # noqa: E402
 
 _BOOTED_AT = time.time()
 
@@ -168,6 +170,12 @@ async def ready():
     # actually wants when they ask "is this thing running itself yet".
     earned = [r for r in AUTONOMY.report() if r["level"] in ("SUPERVISED", "AUTONOMOUS")]
     state["autonomous_capabilities"] = earned
+    # Which model reads every comment first. Reported, never a reason to fail:
+    # an unavailable decision model falls back to Gemini per case.
+    live = triage_status()
+    state["triage"] = {"live": live["live"],
+                       "available": live["backends"][live["live"]]["available"],
+                       "detail": live["backends"][live["live"]]["detail"]}
     return JSONResponse(state, status_code=200 if state["ready"] else 503)
 
 
@@ -305,6 +313,30 @@ def _thin(state: dict) -> dict:
 @app.get("/api/policy/search")
 async def api_policy_search(q: str, k: int = 5):
     return {"results": [c.model_dump() for c in get_store().search(q, k=k)]}
+
+
+# ---------------------------------------------------------------------------
+# Model comparison
+# ---------------------------------------------------------------------------
+
+@app.get("/api/evals/triage")
+async def api_triage_comparison():
+    """The latest triage comparison, and which backends can run here.
+
+    The comparison is produced offline by `python -m sanwaad.evals.triage_compare`
+    rather than on request: it runs every labelled complaint through every
+    model, which takes minutes and, for Gemini, money — not something a page
+    load should start.
+    """
+    from sanwaad.evals.triage_compare import RESULTS_PATH
+
+    body: dict[str, Any] = {"status": triage_status(), "result": None}
+    if RESULTS_PATH.exists():
+        try:
+            body["result"] = json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            body["error"] = f"could not read {RESULTS_PATH.name}: {type(exc).__name__}"
+    return body
 
 
 # ---------------------------------------------------------------------------
