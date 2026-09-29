@@ -11,8 +11,10 @@ executor checks again before anything moves.
 
 Built with LangGraph, Gemini, local hybrid RAG (ONNX embeddings + BM25), typed
 tools with approvals, trace-level evaluation, and a loop-engineered support
-agent that runs act → observe → verify → retry under explicit budgets. It runs
-end to end with no API key.
+agent that runs act → observe → verify → retry under explicit budgets. A review
+console shows every case's state *and the reasons for it*, an operator overview,
+the policy thresholds (editable, on the record), and a comparison of triage
+models on your own labelled data. It runs end to end with no API key.
 
 ```bash
 python -m sanwaad.demo                # the whole system, offline
@@ -77,7 +79,7 @@ A person's approval is bound to a digest of the exact arguments, and the
 executor re-validates before calling the tool, because the ledger can change
 while a case waits. Money can never be auto-approved.
 
-**Tools designed like APIs.** Four tools on a risk ladder: read, low-risk write,
+**Tools designed like APIs.** Six tools on a risk ladder: read, low-risk write,
 high-risk write. Every call goes through one registry, which checks that the
 tool exists, that this agent may call it (least privilege), that the inputs and
 outputs are valid, and that an approval is present when required. It retries
@@ -96,7 +98,7 @@ a live incident and a troll, are graded at every step, not just on the final
 reply. Failures are attributed to the first wrong step, and three safety
 invariants are checked on every run.
 
-**Explicit memory, minimal context.** Eight stores chosen by access pattern,
+**Explicit memory, minimal context.** Twelve stores chosen by access pattern,
 each with retention and a rule for whether a model may see it. Customer text,
 model-written summaries and tool output reach prompts only inside
 `<untrusted>` blocks that can't be closed from inside, and identifiers are
@@ -105,6 +107,27 @@ removed before any prompt is built.
 **Enforced agent contracts.** Each agent declares the state it writes and the
 tools it may call. The graph rejects a node that writes outside its contract,
 and the registry rejects a tool call outside its list.
+
+**Every decision explains itself.** The console shows why a case is where it
+is: the priority score split into its parts, the author's place on the
+troll/audience scale with the evidence, every review rule with a ✓ or ✗, and
+all five voice-callback triggers, including the ones that didn't fire. Each is
+computed by the function that made the decision (the gate *is* the checklist),
+so the explanation can't drift from what happened.
+
+**Autonomy is earned, and policy changes are on the record.** A reply type
+posts without a person only after reviewers agreed with its drafts often
+enough, and loses that the moment they stop. The thresholds behind every
+decision are on a Policy page; with an admin token, thirteen can change inside
+hard bounds, each with a reason, an impact preview on stored cases, and an
+append-only, revertible log. The grounding rule and the ban on auto-promised
+compensation can't be changed there at all.
+
+**The triage model is measured, not assumed.** Triage runs behind one interface
+with three backends: Gemini, Laya (an open-weight decision model that runs
+locally and reports calibrated confidence) and Jev (TypeSafe AI, hosted; not yet
+wired). A comparison scores them on labelled complaints; the winner goes live
+with a setting, and anything it is unsure of falls back to Gemini.
 
 ---
 
@@ -256,6 +279,43 @@ python -m sanwaad.evals.triage_compare     # triage models compared on labelled 
 pytest tests/ -q                           # 420 tests, no API key
 ```
 
+Or in Docker, where that download already happened at build time:
+
+```bash
+docker build -t sanwaad .
+docker run --rm -p 7870:7870 sanwaad                 # offline stubs, no key
+docker run --rm -p 7870:7870 --env-file .env sanwaad # live models
+```
+
+The image bakes in the embedding model and builds the policy index at build
+time, so the container reports `/ready` about a second after start rather than a
+minute. `/health` is liveness and depends on nothing; `/ready` returns 503 until
+the index is loaded, because serving a complaint without retrieval means
+answering it ungrounded.
+
+Run it directly and the first run downloads a ~470 MB multilingual embedding
+model; later starts are instant. Add `GOOGLE_API_KEY` to `.env` for real Gemini calls. The live browser
+voice leg is optional: `pip install -r requirements-voice.txt`, plus Sarvam and
+Murf keys.
+
+### The review console
+
+`python -m sanwaad.api.server`, then http://localhost:7870. Four tabs:
+
+- **Cases** — the queue, and for each case: the complaint, the judge's read of
+  the author, the grounded draft and the clauses behind it, proposed actions
+  with every validation check, the timeline, and *why this case is where it
+  is*. Approve, edit or reject here; money actions are approved one by one.
+- **Overview** — what is waiting on a person, the resolved rate, how much
+  posts without a person and how reviewers decided (an approval with rewritten
+  text counts as an edit), model cost per case against a person, incidents,
+  dead letters, and the autonomy each reply type has earned.
+- **Model comparison** — the latest `triage_compare` run.
+- **Policy** — every threshold, as the running server has it.
+
+The header's health strip shows the index, model mode, the live triage
+backend, both concurrency pools, open circuits and dead letters.
+
 ### Choosing the triage model
 
 Triage is the one model call every comment pays for. `triage_compare` scores
@@ -264,7 +324,7 @@ per category, a confusion matrix, calibration, latency and cost. The console's
 **Model comparison** tab shows the result.
 
 ```bash
-pip install -r requirements-models.txt     # only for Laya: CPU torch + ~1.3 GB checkpoint
+pip install -r requirements-models.txt     # only for Laya: CPU torch + a ~650 MB checkpoint
 python -m sanwaad.evals.triage_compare --data your_complaints.csv
 ```
 
@@ -287,37 +347,30 @@ that is replayed on start and supports one-click revert. The grounding rule,
 the ban on auto-promised compensation and the autonomy maximum are not
 editable there; the reversal ceiling can only be lowered.
 
-Or in Docker, where that download already happened at build time:
+### Working on it with Claude Code
+
+`CLAUDE.md` gives Claude Code the commands, the rules this codebase does not
+bend, and how to work here. `.claude/` adds a test gate: ruff and the related
+tests after each Python edit, and the full suite before a turn is allowed to
+end. A `/handoff` skill writes a session summary for the next session. The same
+gate runs on `git commit` once installed:
 
 ```bash
-docker build -t sanwaad .
-docker run --rm -p 7870:7870 sanwaad                 # offline stubs, no key
-docker run --rm -p 7870:7870 --env-file .env sanwaad # live models
+ln -sf ../../scripts/pre-commit .git/hooks/pre-commit   # ruff + pytest before every commit
 ```
-
-The image bakes in the embedding model and builds the policy index at build
-time, so the container reports `/ready` about a second after start rather than a
-minute. `/health` is liveness and depends on nothing; `/ready` returns 503 until
-the index is loaded, because serving a complaint without retrieval means
-answering it ungrounded.
-
-Run it directly and the first run downloads a ~470 MB multilingual embedding
-model; later starts are instant. Add `GOOGLE_API_KEY` to `.env` for real Gemini calls. The live browser
-voice leg is optional: `pip install -r requirements-voice.txt`, plus Sarvam and
-Murf keys.
 
 ---
 
 ## Learn the design
 
-[`sanwaad/DESIGN.md`](sanwaad/DESIGN.md) is a twenty-lesson course in two parts,
+[`sanwaad/DESIGN.md`](sanwaad/DESIGN.md) is a twenty-two-lesson course in two parts,
 taught through this codebase. Part I covers the building blocks of an agentic
 system: model routing, tools, memory and state, orchestration, evaluation,
 approvals, reliability, cost and latency, context and RAG, observability,
 security and privacy. Part II covers loop engineering: the loop primitive,
 stopping conditions and loop economics, harness engineering and system-level
-evaluation, context rot, verification asymmetry, MINT, the three nested loops
-and the four agentic design patterns. Each lesson points to the
+evaluation, context rot, verification asymmetry, MINT, the three nested loops,
+the four agentic design patterns, earned autonomy and agent handoffs. Each lesson points to the
 code, explains the decision behind it, and ends with a command to run and a
 question to check yourself.
 
@@ -340,9 +393,14 @@ sanwaad/
   router.py       per-step model, token cap, timeout, fallback
   context.py      minimal, trust-separated prompt context
   memory.py       the memory map and retention
-  rag/            clause index, local embeddings, BM25 + RRF, agentic retrieval
+  rag/            clause index, local embeddings, BM25 + RRF (agentic retrieval
+                  is built but not yet wired into the graph)
   guardrails.py   PII redaction, money-promise and injection checks
   autonomy.py     authority each capability has earned, from real reviews
+  triage_backends.py  gemini | laya | jev triage behind one interface
+  explain.py      why a case is where it is, from the deciding functions
+  overview.py     the operator's counts across cases
+  policy_store.py runtime policy changes: bounded, logged, revertible
   handoff.py      agents propose a route; code grants or refuses it
   missions.py     declared workflows — the lead pipeline, on the same harness
   delivery.py     the dead-letter queue: what gave up, and why
@@ -352,6 +410,9 @@ sanwaad/
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
 tests/            420 tests
+scripts/          pre-commit (the test gate for git)
+.claude/          Claude Code settings: the test gate hooks, the /handoff skill
+CLAUDE.md         how to work on this repo, for Claude Code
 ```
 
 ---
@@ -370,6 +431,16 @@ tests/            420 tests
 | 2026-09-23 | `fc6399a` | Bounded concurrency at the choke points: cases queue four at a time so a burst does not become a thundering herd, live calls are refused rather than queued, and both pools report their depth on `/ready` |
 | 2026-09-23 | `708e5e3` | CI on every push: ruff, the 277 tests, both evals, and a Docker build that boots the image and waits for `/ready` — plus the 17 lint findings that had accumulated, including three `zip()` calls that would truncate silently |
 | 2026-09-23 | `1d00dec` | A per-case cost ceiling checked before each model call, degrading the way an outage does so the grounding gate routes it to a person |
+| 2026-09-23 | `e2ac06a` | A health strip in the console header: the index, model mode, both pools, any open circuit and any dead letter, red only when something is actually wrong |
+| 2026-09-23 | `b8f1512` | Review findings closed: the breaker survives the outage it was written for, the concurrency bound can't disable itself, the dead-letter queue keeps its counters, the number normaliser stops inventing amounts |
+| 2026-09-23 | `bc7032b` | Earned autonomy: each reply type moves from shadow to autonomous on measured agreement with reviewers and falls back on disagreement; severity above 3 and money never leave a person (DESIGN Lesson 21) |
+| 2026-09-24 | `2adbd74` | Outage hygiene and an audit close-out: no degraded result is cached or reported as real, UPI addresses are redacted, a lost reply goes to the dead-letter queue, four false claims in the docs corrected |
+| 2026-09-24 | `b48d4c8` | Missions: agents propose where work goes next and code decides whether they may, on a declared route table with a revisit rule (DESIGN Lesson 22) |
+| 2026-09-24 | `cbfe59f` | `DEMO.md`, a tested eight-minute runbook; the call page says why a call can't be placed instead of failing with a 500 |
+| 2026-09-29 | `7375811` | A burst of concurrent cases no longer loses checkpoints to "database is locked": one shared SQLite connection instead of one per call (0 failures in 90, from 1 in 45) |
+| 2026-09-29 | `f14cf1b` | Triage backends (Gemini, Laya, Jev) behind one interface, a live switch with a confidence fallback, and `triage_compare` to score them on labelled data |
+| 2026-09-29 | `b4ff13d` | The console explains every case, and gains Overview, Policy and Model comparison tabs; `CLAUDE.md` and a test gate for working on the repo with Claude Code |
+| 2026-09-29 | `dfd00cc` | Policy thresholds editable from the console with an admin token: hard bounds, a reason, an impact preview, and an append-only, revertible log |
 
 `git log --oneline` for the full history. The repo starts from a clean commit:
 earlier exploratory work on speech-to-speech voice agents lives in a separate
@@ -394,6 +465,14 @@ private repository.
   honoured at recall — an older turn is ignored — but not deleted).
   `python -m sanwaad.memory` prints exactly which is which, and nothing is
   scheduled: pruning runs when someone runs it.
+- **Triage comparison.** First run on the 11 labelled template rows: the
+  offline keyword stub 72.7%, Laya zero-shot 45.5%. That is too few rows to
+  decide anything, Laya's latency couldn't be measured on the (swapping) test
+  machine, and Jev isn't wired yet; the comparison is meant for your own
+  labelled complaints and a live `GOOGLE_API_KEY`.
+- **No login.** The console and its API have no authentication. Policy edits
+  need `SANWAAD_ADMIN_TOKEN`; reviewing, approving and ingesting do not, so
+  don't expose the console beyond people who may approve replies.
 - **Offline loop policy.** Without a key, a scripted policy drives the support
   loop. It reads only what a model would see, but it doesn't wander, so offline
   the ladder shows workflows' value only on the misbehaving-agent scenario; the
