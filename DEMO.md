@@ -98,12 +98,22 @@ gate with a *reason*. Open one and show, in this order:
 - the **draft**, and the clause ids behind every claim in it
 - the **grounding** verdict
 - the gate's reason — e.g. *"resolution needs account data not available publicly"*
+- **Why this case is where it is**: the priority score split into its parts,
+  the author's position on the troll/audience scale, every review rule with a
+  ✓ or ✗, and the voice triggers that did and did not fire — each computed by
+  the code that made the decision
 
 Approve it. The reply posts, and the case moves to a callback.
 
 Point at the **health strip** in the header: index, model mode, both
 concurrency pools, any open circuit, any dead-lettered item. It is red only
 when something is actually wrong.
+
+Then the other tabs: **Overview** (what is waiting, what is resolved, the
+auto-post rate, cost per case against a person, incidents), **Policy** (every
+threshold, read from the running server; editable within bounds when
+`SANWAAD_ADMIN_TOKEN` is set, with a preview, a reason and a revertible log) and **Model comparison** (triage
+backends scored on labelled data).
 
 **Say:** nothing goes out without a person until the system has earned it — and
 that is the next command.
@@ -166,7 +176,7 @@ exists in the table and is still not allowed twice.
 
 | Question | Where the answer is |
 |---|---|
-| "Does it actually work, or is that a demo?" | `pytest -q` — 361 tests, no key needed |
+| "Does it actually work, or is that a demo?" | `pytest -q` — 420 tests, no key needed |
 | "What does it cost per case?" | `python -m sanwaad.obs` — p50/p95, budget, spend per step |
 | "What happens when a tool is down?" | scenario 4 above; the breaker stops calling it after 5 failures in a minute |
 | "What if something fails permanently?" | `python -m sanwaad.delivery` — three attempts, then dead-lettered with the customer's words |

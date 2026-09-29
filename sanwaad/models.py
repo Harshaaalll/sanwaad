@@ -121,6 +121,9 @@ class Priority(BaseModel):
     score: float
     reasons: list[str] = Field(default_factory=list)
     drafting: bool = True   # spend a drafting call at all?
+    # The parts `score` is the sum of (severity, authenticity, reach, pattern,
+    # history), so a reviewer can see what put a case where it is in the queue.
+    components: dict[str, float] = Field(default_factory=dict)
 
 
 class Citation(BaseModel):

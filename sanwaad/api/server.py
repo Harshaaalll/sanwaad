@@ -7,6 +7,8 @@ other local services during a demo.
 from __future__ import annotations
 
 import asyncio
+import hmac
+import json
 import os
 import sys
 import time
@@ -15,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
@@ -25,6 +27,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from sanwaad import policy_store  # noqa: E402
 from sanwaad.autonomy import LEDGER as AUTONOMY  # noqa: E402
 from sanwaad.connectors import get_connector  # noqa: E402
 from sanwaad.delivery import DEAD, DELIVERY  # noqa: E402
@@ -32,6 +35,8 @@ from sanwaad.limits import CALLS, CASES  # noqa: E402
 from sanwaad.limits import report as pool_report  # noqa: E402
 from sanwaad.models import Citation, Complaint  # noqa: E402
 from sanwaad.pipeline import (  # noqa: E402
+    case_states,
+    close_sessions,
     get_case,
     list_cases,
     resume_case,
@@ -39,6 +44,7 @@ from sanwaad.pipeline import (  # noqa: E402
 )
 from sanwaad.rag.store import get_store  # noqa: E402
 from sanwaad.tools import REGISTRY  # noqa: E402
+from sanwaad.triage_backends import status as triage_status  # noqa: E402
 
 _BOOTED_AT = time.time()
 
@@ -70,11 +76,16 @@ async def _warm_index() -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    # Policy changes made through the console survive a restart: replay them
+    # before the first case is decided.
+    for problem in policy_store.replay():
+        logger.error(f"policy override skipped, default kept: {problem}")
     warm = asyncio.create_task(_warm_index())
     try:
         yield
     finally:
         warm.cancel()
+        await close_sessions()
 
 
 app = FastAPI(title="Sanwaad", version="0.1.0", lifespan=_lifespan)
@@ -166,6 +177,12 @@ async def ready():
     # actually wants when they ask "is this thing running itself yet".
     earned = [r for r in AUTONOMY.report() if r["level"] in ("SUPERVISED", "AUTONOMOUS")]
     state["autonomous_capabilities"] = earned
+    # Which model reads every comment first. Reported, never a reason to fail:
+    # an unavailable decision model falls back to Gemini per case.
+    live = triage_status()
+    state["triage"] = {"live": live["live"],
+                       "available": live["backends"][live["live"]]["available"],
+                       "detail": live["backends"][live["live"]]["detail"]}
     return JSONResponse(state, status_code=200 if state["ready"] else 503)
 
 
@@ -246,6 +263,13 @@ async def api_case(case_id: str):
     case = await get_case(case_id)
     if not case:
         raise HTTPException(404, "no such case")
+    from sanwaad.explain import explain
+
+    try:
+        case["explain"] = explain(case["state"], case.get("pending"))
+    except Exception as exc:     # an explanation must never cost the reviewer the case
+        logger.warning(f"explain failed for {case_id}: {type(exc).__name__}: {exc}")
+        case["explain"] = None
     return case
 
 
@@ -303,6 +327,143 @@ def _thin(state: dict) -> dict:
 @app.get("/api/policy/search")
 async def api_policy_search(q: str, k: int = 5):
     return {"results": [c.model_dump() for c in get_store().search(q, k=k)]}
+
+
+# ---------------------------------------------------------------------------
+# Overview and policy — the operator's views
+# ---------------------------------------------------------------------------
+
+@app.get("/api/overview")
+async def api_overview():
+    from sanwaad.overview import summarise
+
+    return summarise(await list_cases(), dead_letters=len(DELIVERY.dead()),
+                     autonomy=AUTONOMY.report())
+
+
+@app.get("/api/settings")
+async def api_settings():
+    """Every threshold that decides a case's state, read from the live objects.
+
+    Read-only by design: these decide what goes out without a person, so they
+    change through code review and a deploy, not a form.
+    """
+    from dataclasses import fields
+
+    from sanwaad import config
+    from sanwaad.graph.nodes import AUTONOMY_MAX_SEVERITY
+    from sanwaad.limits import CALLS as calls_pool
+
+    def policy(obj) -> dict:
+        # Docstrings use *emphasis*; the page renders plain text.
+        return {"doc": " ".join((type(obj).__doc__ or "").replace("*", "").split()),
+                "values": {f.name: getattr(obj, f.name) for f in fields(obj)}}
+
+    return {
+        "policies": {
+            "Review — when a reply may post without a person": policy(config.REVIEW),
+            "Judge — reading the author": policy(config.JUDGE),
+            "Crisis — when complaints become an incident": policy(config.CRISIS),
+            "Actions — limits on what the executor may do": policy(config.ACTIONS),
+        },
+        "fixed": {
+            "autonomy_max_severity": AUTONOMY_MAX_SEVERITY,
+            "max_case_cost_inr": config.MAX_CASE_COST_INR,
+            "concurrent_cases": CASES.limit,
+            "concurrent_calls": calls_pool.limit,
+        },
+        "models": {"triage": config.TIER_TRIAGE, "draft": config.TIER_DRAFT,
+                   "reasoning": config.TIER_REASONING, "embeddings": config.EMBED_MODEL,
+                   "triage_backend": triage_status()["live"]},
+        "where": "sanwaad/config.py (policies), environment variables in .env.example",
+        "editable": policy_store.describe(),
+        "editing_enabled": bool(os.getenv("SANWAAD_ADMIN_TOKEN")),
+        "history": list(reversed(policy_store.history()))[:50],
+    }
+
+
+def _require_admin(token: Optional[str]) -> None:
+    """Policy edits need the admin token. With none configured, editing is off.
+
+    The console has no login, so this is the only thing between anyone who can
+    open it and a looser auto-post rule.
+    """
+    expected = os.getenv("SANWAAD_ADMIN_TOKEN")
+    if not expected:
+        raise HTTPException(403, "policy editing is disabled: set SANWAAD_ADMIN_TOKEN to enable it")
+    if not token or not hmac.compare_digest(token.encode(), expected.encode()):
+        raise HTTPException(401, "wrong or missing admin token")
+
+
+class PolicyChange(BaseModel):
+    policy: str
+    field: str
+    value: Any
+    reason: str = ""
+    actor: str = ""
+
+
+class PolicyRevert(BaseModel):
+    change_id: str
+    reason: str = ""
+    actor: str = ""
+
+
+@app.post("/api/settings/preview")
+async def api_settings_preview(req: PolicyChange):
+    """Read-only: which stored cases the candidate value would decide differently."""
+    try:
+        return policy_store.preview(req.policy, req.field, req.value, await case_states())
+    except policy_store.PolicyError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.post("/api/settings/change")
+async def api_settings_change(req: PolicyChange, x_admin_token: Optional[str] = Header(None)):
+    _require_admin(x_admin_token)
+    try:
+        entry = policy_store.apply(req.policy, req.field, req.value,
+                                   reason=req.reason, actor=req.actor)
+    except policy_store.PolicyError as exc:
+        raise HTTPException(400, str(exc)) from None
+    logger.warning(f"policy change {entry['id']}: {entry['policy']}.{entry['field']} "
+                   f"{entry['old']} -> {entry['new']} by {entry['actor']}: {entry['reason']}")
+    return entry
+
+
+@app.post("/api/settings/revert")
+async def api_settings_revert(req: PolicyRevert, x_admin_token: Optional[str] = Header(None)):
+    _require_admin(x_admin_token)
+    try:
+        entry = policy_store.revert(req.change_id, reason=req.reason, actor=req.actor)
+    except policy_store.PolicyError as exc:
+        raise HTTPException(400, str(exc)) from None
+    logger.warning(f"policy revert {entry['id']} of {req.change_id} by {entry['actor']}")
+    return entry
+
+
+# ---------------------------------------------------------------------------
+# Model comparison
+# ---------------------------------------------------------------------------
+
+@app.get("/api/evals/triage")
+async def api_triage_comparison():
+    """The latest triage comparison, and which backends can run here.
+
+    The comparison is produced offline by `python -m sanwaad.evals.triage_compare`
+    rather than on request: it runs every labelled complaint through every
+    model, which takes minutes and, for Gemini, money — not something a page
+    load should start.
+    """
+    from sanwaad.evals.triage_compare import RESULTS_PATH
+
+    body: dict[str, Any] = {"status": triage_status(), "result": None}
+    if RESULTS_PATH.exists():
+        try:
+            body["result"] = json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            body["error"] = f"could not read {RESULTS_PATH.name}: {type(exc).__name__}"
+    return body
 
 
 # ---------------------------------------------------------------------------

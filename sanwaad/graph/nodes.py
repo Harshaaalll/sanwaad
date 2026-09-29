@@ -6,6 +6,7 @@ import json
 import re
 from typing import Optional
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..caching import TRIAGE_CACHE
@@ -60,9 +61,138 @@ _REGULATORY_PATTERNS = re.compile(
 )
 
 
+_SUMMARY_SYSTEM = """You summarise inbound public comments for NimbusPay, an Indian UPI wallet.
+Another system has already classified the comment; you only write two fields.
+
+`summary` MUST be written in English regardless of the comment's language, in
+one sentence, naming the amount and timeframe if present. This summary is used
+verbatim as a retrieval query against an English policy index, so write it with
+the vocabulary a policy document would use.
+
+`language` is the BCP-47 tag of the language to REPLY in, mirroring the
+customer. Hinglish in Latin script is "hi-Latn"."""
+
+
+class TriageSummary(BaseModel):
+    """The two triage fields a decision model cannot produce."""
+
+    summary: str
+    language: str = "en"
+
+
+async def llm_triage(text: str, channel: str, *, spent_inr: float = 0.0,
+                     trace_id: Optional[str] = None,
+                     use_cache: bool = True) -> tuple[Triage, dict]:
+    """Generative triage: one structured call that writes every field.
+
+    `text` must already have been through `check_complaint`. The comparison
+    harness passes `use_cache=False`, because a cache hit is free and instant
+    and would report a latency and cost no real call has.
+    """
+    r = route("triage")
+    cached = TRIAGE_CACHE.get(r.model, text, namespace="triage") if use_cache else None
+    if cached is not None:
+        return Triage(**cached), {"stage": "triage", "model": "cache", "usd": 0.0, "inr": 0.0,
+                                  "prompt_tokens": 0, "output_tokens": 0, "attempts": 0}
+
+    # Minimal, isolated context: no author handle, no identifiers, and
+    # the comment fenced off as data rather than pasted in as prose.
+    result, cost = await structured(
+        model=r.model,
+        fallback_model=r.fallback,
+        system=with_trust_rules(_TRIAGE_SYSTEM),
+        user=(f"A public comment on {channel}:\n\n"
+              + untrusted("customer_comment", minimal_text(text))),
+        schema=Triage,
+        stage="triage",
+        offline_fallback=_offline_triage(text),
+        max_output_tokens=r.max_output_tokens,
+        timeout_s=r.timeout_s,
+        max_latency_ms=r.max_latency_ms,
+        spent_inr=spent_inr,
+        budget_inr=MAX_CASE_COST_INR,
+        trace_id=trace_id,
+    )
+    # Only a real answer is worth keeping. A degraded result is the
+    # keyword stub standing in for a model that could not run, and
+    # caching it lets a thirty-second provider blip go on answering for
+    # every similar complaint until the entry expires — an outage
+    # contaminating healthy traffic long after it ended, and arriving
+    # as a clean cache hit with nothing marked degraded about it.
+    if use_cache and not (cost.get("degraded") or cost.get("model") in NON_CALL_MODELS):
+        TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"), namespace="triage")
+    return result, cost
+
+
+async def _decision_triage(backend_name: str, text: str, channel: str, *,
+                           spent_inr: float, trace_id: str
+                           ) -> tuple[Optional[Triage], list[dict], str]:
+    """Triage with a decision model, or say why not.
+
+    Returns (triage, costs, note). A None triage means the caller falls back to
+    the generative path, and `note` is the reason, which goes on the timeline:
+    "why did Laya not triage this one" is the first question anyone comparing
+    backends asks.
+    """
+    from ..triage_backends import BackendUnavailable, get_backend, min_confidence
+
+    backend = get_backend(backend_name)
+    try:
+        labels = await backend.classify(text, channel)
+    except BackendUnavailable as exc:
+        return None, [], f"{backend_name} unavailable ({exc}); gemini triaged instead"
+    except Exception as exc:  # a broken local model must not stop the case
+        logger.warning(f"{backend_name} triage failed: {type(exc).__name__}: {exc}")
+        return None, [], f"{backend_name} failed ({type(exc).__name__}); gemini triaged instead"
+
+    floor = min_confidence()
+    if labels.confidence is not None and labels.confidence < floor:
+        return None, [labels.cost], (f"{backend_name} unsure of the category "
+                                     f"({labels.category} at {labels.confidence:.2f} < {floor:.2f}); "
+                                     "gemini triaged instead")
+
+    # Hybrid: labels from the decision model, words from the triage tier.
+    r = route("triage")
+    fallback = _offline_triage(text)
+    words, words_cost = await structured(
+        model=r.model,
+        fallback_model=r.fallback,
+        system=with_trust_rules(_SUMMARY_SYSTEM),
+        user=(f"A public comment on {channel}, classified as {labels.category}:\n\n"
+              + untrusted("customer_comment", minimal_text(text))),
+        schema=TriageSummary,
+        stage="triage_summary",
+        offline_fallback={
+            "summary": f"Customer reports an issue in the {labels.category} category: {text[:160]}",
+            "language": fallback["language"],
+        },
+        max_output_tokens=r.max_output_tokens,
+        timeout_s=r.timeout_s,
+        max_latency_ms=r.max_latency_ms,
+        spent_inr=spent_inr,
+        budget_inr=MAX_CASE_COST_INR,
+        trace_id=trace_id,
+    )
+    triage = Triage(
+        is_complaint=labels.is_complaint,
+        category=labels.category,
+        severity=labels.severity,
+        sentiment=labels.sentiment,
+        language=words.language,
+        summary=words.summary,
+        needs_private_data=labels.needs_private_data,
+    )
+    conf = f" at {labels.confidence:.2f}" if labels.confidence is not None else ""
+    return triage, [labels.cost, words_cost], f"labels by {labels.model}{conf}"
+
+
 async def triage_node(state: GrievanceState) -> dict:
+    from ..triage_backends import live_backend_name
+
     complaint = state["complaint"]
     text = complaint["text"]
+    backend = live_backend_name()
+    note = ""
 
     with TRACER.span("triage", trace_id=state["case_id"]) as span:
         # INPUT guardrail. The complaint is untrusted text that is about to be
@@ -70,49 +200,24 @@ async def triage_node(state: GrievanceState) -> dict:
         # the downstream router and the auto-post gate can both see it.
         text, input_violations = check_complaint(text)
         injection = [v.detail for v in input_violations if v.rule == "injection"]
+        span.set(backend=backend, injection=bool(injection))
 
-        r = route("triage")
-        span.set(model=r.model, injection=bool(injection))
-
-        cached = TRIAGE_CACHE.get(r.model, text, namespace="triage")
-        if cached is not None:
-            span.set(cache="hit")
-            result = Triage(**cached)
-            cost = {"stage": "triage", "model": "cache", "usd": 0.0, "inr": 0.0,
-                    "prompt_tokens": 0, "output_tokens": 0, "attempts": 0}
+        result, costs = None, []
+        if backend != "gemini":
+            result, costs, note = await _decision_triage(
+                backend, text, complaint["channel"],
+                spent_inr=_spent(state), trace_id=state["case_id"])
+        if result is None:
+            backend_used = "gemini"
+            result, cost = await llm_triage(text, complaint["channel"],
+                                            spent_inr=_spent(state),
+                                            trace_id=state["case_id"])
+            costs = costs + [cost]
+            span.set(model=cost.get("model"), cache="hit" if cost.get("model") == "cache" else "miss")
         else:
-            span.set(cache="miss")
-            fallback = _offline_triage(text)
-            # Minimal, isolated context: no author handle, no identifiers, and
-            # the comment fenced off as data rather than pasted in as prose.
-            result, cost = await structured(
-                model=r.model,
-                fallback_model=r.fallback,
-                system=with_trust_rules(_TRIAGE_SYSTEM),
-                user=(f"A public comment on {complaint['channel']}:\n\n"
-                      + untrusted("customer_comment", minimal_text(text))),
-                schema=Triage,
-                stage="triage",
-                offline_fallback=fallback,
-                max_output_tokens=r.max_output_tokens,
-                timeout_s=r.timeout_s,
-                max_latency_ms=r.max_latency_ms,
-                spent_inr=_spent(state),
-                budget_inr=MAX_CASE_COST_INR,
-                trace_id=state["case_id"],
-            )
-            # Only a real answer is worth keeping. A degraded result is the
-            # keyword stub standing in for a model that could not run, and
-            # caching it lets a thirty-second provider blip go on answering for
-            # every similar complaint until the entry expires — an outage
-            # contaminating healthy traffic long after it ended, and arriving
-            # as a clean cache hit with nothing marked degraded about it.
-            if cost.get("degraded") or cost.get("model") in NON_CALL_MODELS:
-                span.set(cache="not-stored", cache_skip_reason=cost.get("model"))
-            else:
-                TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"),
-                                 namespace="triage")
-        span.set(cost_inr=cost.get("inr", 0.0))
+            backend_used = backend
+        span.set(backend_used=backend_used,
+                 cost_inr=sum(c.get("inr", 0.0) for c in costs))
 
     # Deterministic override. A keyword match here outranks the model, because
     # a missed regulatory mention is a compliance incident and a false positive
@@ -121,15 +226,18 @@ async def triage_node(state: GrievanceState) -> dict:
     if regulatory and result.severity < 5:
         result.severity = 5
 
+    message = f"{result.category.value} / severity {result.severity} / {result.sentiment}"
+    if backend != "gemini":
+        message += f" — {note}"
     return {
         "triage": result.model_dump(mode="json"),
         "retrieval_query": result.summary,
         "injection_flagged": bool(injection),
-        "costs": [cost],
+        "costs": costs,
         "events": [event(
-            "triage",
-            f"{result.category.value} / severity {result.severity} / {result.sentiment}",
+            "triage", message,
             regulatory_flag=regulatory, injection=bool(injection),
+            backend=backend_used,
         )],
     }
 
@@ -385,7 +493,7 @@ async def judge_node(state: GrievanceState) -> dict:
 _PATTERN_WEIGHT = {"none": 0.0, "watch": 15.0, "crisis": 40.0}
 
 
-def prioritise(triage: dict, verdict: dict, pattern: dict) -> Priority:
+def prioritise(triage: dict, verdict: dict, pattern: dict, judge=None) -> Priority:
     """How urgent is this, and is it worth drafting for at all?
 
     Severity says how bad it is for one person, the verdict says whose voice it
@@ -394,22 +502,34 @@ def prioritise(triage: dict, verdict: dict, pattern: dict) -> Priority:
     outage arrives as forty separate tickets; by reach alone the loudest
     account outranks the person who actually lost money.
     """
+    judge = judge or JUDGE         # a candidate policy when previewing an edit
     reasons: list[str] = []
     level = pattern.get("level", "none")
     severity = int(triage.get("severity", 1))
     authenticity = float(verdict.get("authenticity", 0.5))
     reach = int(verdict.get("reach", 0))
 
-    score = severity * 10.0 + authenticity * 8.0
-    score += min(reach / 1000.0, 20.0)
-    score += _PATTERN_WEIGHT.get(level, 0.0)
-    if verdict.get("history_with_brand"):
-        score += 5.0
+    # Kept as named parts so the console can show where a score came from:
+    # "43.1" alone does not tell a reviewer whether reach or severity put a
+    # case at the top of the queue.
+    parts = {
+        "severity": severity * 10.0,
+        "authenticity": authenticity * 8.0,
+        "reach": min(reach / 1000.0, 20.0),
+        "pattern": _PATTERN_WEIGHT.get(level, 0.0),
+        "history": 5.0 if verdict.get("history_with_brand") else 0.0,
+    }
+    score = sum(parts.values())
+    if parts["history"]:
         reasons.append("known customer with prior cases")
+
+    def _priority(tier: str, drafting: bool) -> Priority:
+        return Priority(tier=tier, score=round(score, 1), reasons=reasons, drafting=drafting,
+                        components={k: round(v, 2) for k, v in parts.items()})
 
     if level == "crisis":
         reasons.append(f"crisis: {pattern.get('cluster_size')} authors reporting the same thing")
-        return Priority(tier="crisis", score=round(score, 1), reasons=reasons, drafting=True)
+        return _priority("crisis", True)
 
     # Not worth drafting for. Note what this does NOT do: it does not delete
     # the case or mark it handled. It is recorded, counted by the pattern
@@ -417,23 +537,23 @@ def prioritise(triage: dict, verdict: dict, pattern: dict) -> Priority:
     # saw it" are different failures, and only one of them is defensible.
     if not verdict.get("reply_worthy", True):
         reasons.append(f"{verdict.get('author_class')} with reach {reach}: logged, not answered")
-        return Priority(tier="ignore", score=round(score, 1), reasons=reasons, drafting=False)
+        return _priority("ignore", False)
 
     if not triage.get("is_complaint") and severity < 4:
         reasons.append("not a complaint")
-        return Priority(tier="ignore", score=round(score, 1), reasons=reasons, drafting=False)
+        return _priority("ignore", False)
 
-    if severity >= 4 or level == "watch" or reach >= JUDGE.reply_worthy_reach:
+    if severity >= 4 or level == "watch" or reach >= judge.reply_worthy_reach:
         if severity >= 4:
             reasons.append(f"severity {severity}")
         if level == "watch":
             reasons.append(f"{pattern.get('cluster_size')} similar in the last hour")
-        if reach >= JUDGE.reply_worthy_reach:
+        if reach >= judge.reply_worthy_reach:
             reasons.append(f"audience of {reach:,}")
-        return Priority(tier="priority", score=round(score, 1), reasons=reasons, drafting=True)
+        return _priority("priority", True)
 
     reasons.append("routine complaint")
-    return Priority(tier="routine", score=round(score, 1), reasons=reasons, drafting=True)
+    return _priority("routine", True)
 
 
 async def prioritise_node(state: GrievanceState) -> dict:
@@ -830,56 +950,96 @@ async def plan_node(state: GrievanceState) -> dict:
 # Review gate
 # ---------------------------------------------------------------------------
 
+def review_checks(state: GrievanceState, review=None) -> tuple[list[dict], bool, str]:
+    """Every rule the review gate applies to this case, and what it decided.
+
+    Returns (checks, allowed, reason). Each check is {rule, passed, detail,
+    kind}: `hard` rules are safety invariants no track record buys past,
+    `severity` is the fixed ceiling, and `earned` is per-category autonomy.
+    The gate itself is derived from this list, so the explanation a reviewer
+    reads in the console and the decision the gate made cannot drift apart.
+    """
+    review = review or REVIEW      # a candidate policy when previewing an edit
+    triage = state["triage"]
+    draft = state["draft"]
+    grounding = state.get("grounding") or {}
+    blocking = [g for g in (state.get("guardrails") or []) if g.get("severity") == "block"]
+
+    # Ordered by consequence, so the reason a reviewer reads first is the one
+    # that matters most when several apply at once.
+    hard = [
+        # Including proposals that failed validation: a refused attempt to move
+        # someone else's money is exactly what a person should see.
+        ("no money-moving action",
+         not any(a["proposal"]["risk"] == "write_high" for a in (state.get("actions") or [])),
+         "a money-moving action is proposed; a human approves the exact action"),
+        ("no instruction-like text",
+         not state.get("injection_flagged"),
+         "complaint contains instruction-like text; never auto-post"),
+        # During an incident the individually-correct reply is the dangerous
+        # one: forty auto-posted apologies with slightly different wording IS
+        # the screenshot. One human decides the line, then everything uses it.
+        ("not part of a crisis",
+         (state.get("pattern") or {}).get("level") != "crisis",
+         "crisis pattern detected; incident replies go out under one human line"),
+        ("no guardrail block",
+         not blocking,
+         f"guardrail block: {[g['rule'] for g in blocking]}"),
+        ("promises no compensation",
+         not (review.forbid_auto_compensation and draft.get("promises_compensation")),
+         "draft commits money; clause RFD-05 requires approval"),
+        ("every claim grounded",
+         not (review.require_grounded and not grounding.get("grounded")),
+         "draft contains unsupported claims"),
+        ("needs no private data",
+         not triage.get("needs_private_data"),
+         "resolution needs account data not available publicly"),
+    ]
+    checks = [{"rule": rule, "passed": ok, "detail": "" if ok else why, "kind": "hard"}
+              for rule, ok, why in hard]
+    failed = next((c for c in checks if not c["passed"]), None)
+    if failed:
+        return checks, False, failed["detail"]
+
+    # Everything above is a hard rule: a safety invariant that no track record
+    # buys its way past. What is left is the ordinary case, and how much of it
+    # the system may handle alone is earned rather than fixed.
+    severity = triage["severity"]
+    if severity <= review.auto_post_max_severity:
+        reason = "low severity, fully grounded, commits nothing"
+        checks.append({"rule": f"severity ≤ {review.auto_post_max_severity} posts on its own",
+                       "passed": True, "detail": reason, "kind": "severity"})
+        return checks, True, reason
+    if severity > AUTONOMY_MAX_SEVERITY:
+        reason = (f"severity {severity} is above {AUTONOMY_MAX_SEVERITY}, "
+                  f"where a person decides whatever the track record says")
+        checks.append({"rule": f"severity ≤ {AUTONOMY_MAX_SEVERITY} for any autonomy",
+                       "passed": False, "detail": reason, "kind": "severity"})
+        return checks, False, reason
+
+    category = triage.get("category", "general")
+    verdict = autonomy_for(f"reply.{category}")
+    if verdict.acts_without_a_person:
+        reason = (f"severity {severity}: reply.{category} is "
+                  f"{verdict.level.name.lower()} — {verdict.reason}")
+    else:
+        reason = (f"severity {severity} above the fixed ceiling "
+                  f"{review.auto_post_max_severity}, and reply.{category} "
+                  f"has not earned it: {verdict.reason}")
+    checks.append({"rule": f"reply.{category} has earned autonomy",
+                   "passed": verdict.acts_without_a_person,
+                   "detail": f"{verdict.level.name.lower()} — {verdict.reason}", "kind": "earned"})
+    return checks, verdict.acts_without_a_person, reason
+
+
 def auto_post_allowed(state: GrievanceState) -> tuple[bool, str]:
     """Decide whether this reply may go out without a human.
 
     Returns (allowed, reason). The reason is logged either way, because
     "why did this need a human" is the question a pilot customer asks most.
     """
-    triage = state["triage"]
-    draft = state["draft"]
-    grounding = state.get("grounding") or {}
-
-    # Ordered by consequence, so the reason a reviewer reads first is the one
-    # that matters most when several apply at once.
-    if any(a["proposal"]["risk"] == "write_high" for a in (state.get("actions") or [])):
-        # Including proposals that failed validation: a refused attempt to move
-        # someone else's money is exactly what a person should see.
-        return False, "a money-moving action is proposed; a human approves the exact action"
-    if state.get("injection_flagged"):
-        return False, "complaint contains instruction-like text; never auto-post"
-    if (state.get("pattern") or {}).get("level") == "crisis":
-        # During an incident the individually-correct reply is the dangerous
-        # one: forty auto-posted apologies with slightly different wording IS
-        # the screenshot. One human decides the line, then everything uses it.
-        return False, "crisis pattern detected; incident replies go out under one human line"
-    blocking = [g for g in (state.get("guardrails") or []) if g.get("severity") == "block"]
-    if blocking:
-        return False, f"guardrail block: {[g['rule'] for g in blocking]}"
-    if REVIEW.forbid_auto_compensation and draft.get("promises_compensation"):
-        return False, "draft commits money; clause RFD-05 requires approval"
-    if REVIEW.require_grounded and not grounding.get("grounded"):
-        return False, "draft contains unsupported claims"
-    if triage.get("needs_private_data"):
-        return False, "resolution needs account data not available publicly"
-
-    # Everything above is a hard rule: a safety invariant that no track record
-    # buys its way past. What is left is the ordinary case, and how much of it
-    # the system may handle alone is earned rather than fixed.
-    if triage["severity"] <= REVIEW.auto_post_max_severity:
-        return True, "low severity, fully grounded, commits nothing"
-    if triage["severity"] > AUTONOMY_MAX_SEVERITY:
-        return False, (f"severity {triage['severity']} is above {AUTONOMY_MAX_SEVERITY}, "
-                       f"where a person decides whatever the track record says")
-
-    category = triage.get("category", "general")
-    verdict = autonomy_for(f"reply.{category}")
-    if verdict.acts_without_a_person:
-        return True, (f"severity {triage['severity']}: reply.{category} is "
-                      f"{verdict.level.name.lower()} — {verdict.reason}")
-    return False, (f"severity {triage['severity']} above the fixed ceiling "
-                   f"{REVIEW.auto_post_max_severity}, and reply.{category} "
-                   f"has not earned it: {verdict.reason}")
+    _, allowed, reason = review_checks(state)
+    return allowed, reason
 
 
 # Severity above this is always a person's call. Autonomy widens what the
@@ -1115,33 +1275,49 @@ class EscalationDecision(BaseModel):
     suggested_channel: str = Field(default="webrtc", description="webrtc or exotel")
 
 
+def escalation_checks(state: GrievanceState, review=None) -> list[dict]:
+    """Each ESC-02 trigger, and whether it fired for this case.
+
+    One entry per rule, fired or not, so the console can show a reviewer the
+    triggers that did *not* apply as well: "why no call?" is answered by the
+    same list the node acts on.
+    """
+    review = review or REVIEW      # a candidate policy when previewing an edit
+    triage = state["triage"]
+    text = state["complaint"]["text"]
+    severity = triage["severity"]
+    amount = _largest_rupee_amount(text)
+    pattern = state.get("pattern") or {}
+    verdict = state.get("verdict") or {}
+    rules = [
+        (f"severity ≥ {review.escalate_to_voice_min_severity}",
+         severity >= review.escalate_to_voice_min_severity,
+         f"severity {severity} (ESC-02)"),
+        ("account access or data privacy",
+         triage["category"] in ("account_access", "data_privacy"),
+         f"{triage['category']} always escalates (ESC-02)"),
+        ("disputed amount over ₹2,000",
+         bool(amount and amount > 2000),
+         f"disputed amount ₹{amount or 0:,.0f} exceeds ₹2,000 (ESC-02)"),
+        ("customer asked to talk",
+         bool(re.search(r"\b(call me|baat kar|phone|speak to|talk to someone)\b", text, re.I)),
+         "customer explicitly asked to speak to someone (ESC-02)"),
+        # A verified customer caught in a live incident gets the call, whatever
+        # their individual severity says. Their problem is not small; it is early.
+        ("confirmed customer in a crisis",
+         pattern.get("level") == "crisis" and verdict.get("author_class") == "customer",
+         f"crisis cluster of {pattern.get('cluster_size')} and a confirmed customer"),
+    ]
+    return [{"rule": rule, "fired": fired, "detail": detail} for rule, fired, detail in rules]
+
+
 async def escalation_node(state: GrievanceState) -> dict:
     """Apply clause ESC-02 rather than asking a model to remember it.
 
     The escalation triggers are written down and enumerable, so they are code.
     A model is not more accurate here, only more expensive and less auditable.
     """
-    triage = state["triage"]
-    text = state["complaint"]["text"]
-    reasons = []
-
-    if triage["severity"] >= REVIEW.escalate_to_voice_min_severity:
-        reasons.append(f"severity {triage['severity']} (ESC-02)")
-    if triage["category"] in ("account_access", "data_privacy"):
-        reasons.append(f"{triage['category']} always escalates (ESC-02)")
-    amount = _largest_rupee_amount(text)
-    if amount and amount > 2000:
-        reasons.append(f"disputed amount ₹{amount:,.0f} exceeds ₹2,000 (ESC-02)")
-    if re.search(r"\b(call me|baat kar|phone|speak to|talk to someone)\b", text, re.I):
-        reasons.append("customer explicitly asked to speak to someone (ESC-02)")
-
-    # A verified customer caught in a live incident gets the call, whatever
-    # their individual severity says. Their problem is not small; it is early.
-    pattern = state.get("pattern") or {}
-    verdict = state.get("verdict") or {}
-    if pattern.get("level") == "crisis" and verdict.get("author_class") == "customer":
-        reasons.append(f"crisis cluster of {pattern.get('cluster_size')} and a confirmed customer")
-
+    reasons = [c["detail"] for c in escalation_checks(state) if c["fired"]]
     needed = bool(reasons)
     return {
         "escalation": {

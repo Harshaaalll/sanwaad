@@ -1,0 +1,5 @@
+#!/bin/sh
+# git pre-commit: a commit needs ruff and the full pytest suite to pass.
+# Install once:  ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+# Skip in an emergency:  git commit --no-verify
+exec python3 "$(git rev-parse --show-toplevel)/.claude/hooks/gate.py" pre-commit
