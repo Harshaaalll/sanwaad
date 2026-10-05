@@ -276,7 +276,7 @@ python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
 python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
-pytest tests/ -q                           # 421 tests, no API key
+pytest tests/ -q                           # 424 tests, no API key
 node --test tests/js/*.test.js                      # the console's own logic (pytest runs it too)
 ```
 
@@ -307,10 +307,12 @@ Murf keys.
   the author, the grounded draft and the clauses behind it, proposed actions
   with every validation check, the timeline, and *why this case is where it
   is*. Approve, edit or reject here; money actions are approved one by one.
-- **Overview** — what is waiting on a person, the resolved rate, how much
-  posts without a person and how reviewers decided (an approval with rewritten
-  text counts as an edit), model cost per case against a person, incidents,
-  dead letters, and the autonomy each reply type has earned.
+- **Overview** — leads with how many complaints are waiting on a person and
+  how long the oldest has waited, then the last 14 days: complaints opened and
+  resolved per day, what people are complaining about this week against last,
+  first-reply time against a target (`SANWAAD_SLA_FIRST_RESPONSE_MINUTES`,
+  default 4 hours), how much posts without a person and how reviewers decided,
+  model cost per case, incidents, and the autonomy each reply type has earned.
 - **Model comparison** — the latest `triage_compare` run.
 - **Policy** — every threshold, as the running server has it.
 
@@ -410,7 +412,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            421 tests
+tests/            424 tests
 scripts/          pre-commit (the test gate for git)
 .claude/          Claude Code settings: the test gate hooks, the /handoff skill
 CLAUDE.md         how to work on this repo, for Claude Code

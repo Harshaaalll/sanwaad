@@ -16,7 +16,7 @@ const vm = require("node:vm");
 const HTML = fs.readFileSync(path.join(__dirname, "../../sanwaad/api/static/console.html"), "utf8");
 const SCRIPT = HTML.match(/<script>([\s\S]*)<\/script>/)[1];
 const EXPORTS = ["statusOf", "inFilter", "catLabel", "esc", "ago", "load", "renderList", "whyCard",
-                 "draftChanged", "review", "rejectCase"];
+                 "draftChanged", "review", "rejectCase", "niceMax", "momentumHtml", "volumeChart"];
 
 function fakeElement(id) {
   const classes = new Set();
@@ -240,4 +240,36 @@ test("the why-card marks the first failing rule as the reason given", () => {
   assert.match(html, /no money-moving action \(reason given\)/);
   assert.doesNotMatch(html, /needs no private data \(reason given\)/, "only the first failure is the reason");
   assert.match(html, /No trigger fired, so no call is offered/);
+});
+
+// --- overview charts ----------------------------------------------------------------
+
+test("the volume chart's axis tops out just above the busiest day", () => {
+  const {api} = page();
+  assert.equal(api.niceMax(3), 4);
+  assert.equal(api.niceMax(51), 60);
+  assert.equal(api.niceMax(80), 80);
+  assert.equal(api.niceMax(101), 200);
+});
+
+test("more complaints than last week reads as a red up-arrow, never colour alone", () => {
+  const {api} = page();
+  const html = api.momentumHtml([
+    {category: "refund", this_week: 6, last_week: 2, change: 4},
+    {category: "billing", this_week: 1, last_week: 3, change: -2},
+    {category: "praise", this_week: 2, last_week: 2, change: 0}]);
+  assert.match(html, /class="delta up"[^>]*>▲ 4</);
+  assert.match(html, /class="delta down"[^>]*>▼ 2</);
+  assert.match(html, /no change/);
+  assert.match(html, /Refund/);                       // plain-language label, not the id
+});
+
+test("the volume chart labels both lines at their last point and names today", () => {
+  const {api} = page();
+  const days = Array.from({length: 14}, (_, i) => `2026-09-${String(22 + i).padStart(2, "0")}`);
+  const svg = api.volumeChart({days, opened: [...Array(13).fill(1), 5], resolved: [...Array(13).fill(0), 2]}, 640);
+  assert.match(svg, />Opened 5</);
+  assert.match(svg, />Resolved 2</);
+  assert.match(svg, />Today</);
+  assert.match(svg, /aria-label="Complaints opened and resolved per day, last 14 days"/);
 });
