@@ -104,3 +104,41 @@ async def test_no_corrections_means_no_examples_and_no_mention(monkeypatch, corr
     out = await nodes.draft_node(_state())
     assert "reviewer_examples" not in seen["user"]
     assert "example" not in out["events"][0]["message"]
+
+
+# --- sign-offs ------------------------------------------------------------------
+
+def test_a_personal_sign_off_never_reaches_the_examples(corrections):
+    from sanwaad.config import SIGN_OFF
+
+    feedback.record(_fb("approve", "Sorry about this. — Adhik, ref 3cc8b0", "Sorry, reversed today. — Harshal"),
+                    corrections)
+    (rec,) = feedback.load(corrections)
+    assert rec.final == f"Sorry, reversed today. — {SIGN_OFF}"
+    assert "Harshal" not in corrections.read_text() and "Adhik" not in corrections.read_text()
+    report = learning_report([rec])
+    assert not any("harshal" in w for w, _ in report["top_added"])
+
+
+def test_rows_stored_before_the_fix_are_cleaned_when_read(corrections):
+    import json
+
+    corrections.write_text(json.dumps({**_fb("approve", "Hi. — Adhik", "Hello. — harshal").__dict__}) + "\n")
+    (rec,) = feedback.load(corrections)
+    assert "harshal" not in rec.final and "Adhik" not in rec.draft
+
+
+def test_a_dash_inside_a_sentence_is_left_alone():
+    from sanwaad.feedback import team_signoff
+
+    text = "Reversals take 3–5 working days — usually less. We'll DM you."
+    assert team_signoff(text) == text
+
+
+@pytest.mark.asyncio
+async def test_the_offline_reply_signs_off_as_the_team(monkeypatch, corrections):
+    from sanwaad.config import SIGN_OFF
+
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    out = await nodes.draft_node(_state())
+    assert f"— {SIGN_OFF}, ref" in out["draft"]["text"] and "Adhik" not in out["draft"]["text"]

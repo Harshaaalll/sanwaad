@@ -29,10 +29,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
-from .config import DATA_DIR
+from .config import DATA_DIR, SIGN_OFF
 from .guardrails import redact
 
 FEEDBACK_PATH = DATA_DIR / "feedback.jsonl"
+
+# A trailing "— Name, ref abc123" style sign-off: an em or en dash (a hyphen is
+# too common in ordinary sentences to trust), then a short tail with no sentence
+# punctuation, so "— usually less. We'll DM you." stays a sentence.
+_SIGN_OFF_TAIL = re.compile(r"\s*[—–]\s*[^\n—–.!?]{1,40}\.?\s*$")
+
+
+def team_signoff(text: str) -> str:
+    """Replace a reply's sign-off with the team one.
+
+    Reviewers sign with their own name; stored as-is, that name became a
+    "word reviewers add" and a sign-off the next draft copied. Normalising
+    keeps the edit's substance and drops the person.
+    """
+    if not text or not _SIGN_OFF_TAIL.search(text):
+        return text
+    return _SIGN_OFF_TAIL.sub(f" — {SIGN_OFF}", text)
 
 
 @dataclass
@@ -93,6 +110,8 @@ def record(fb: FeedbackRecord, path: Optional[Path] = None) -> None:
     row = asdict(fb)
     for key in ("complaint", "draft", "final"):
         row[key] = redact(row.get(key) or "")[0]
+    for key in ("draft", "final"):
+        row[key] = team_signoff(row[key])
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -105,9 +124,12 @@ def load(path: Optional[Path] = None) -> list[FeedbackRecord]:
     out = []
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
-            out.append(FeedbackRecord(**json.loads(line)))
+            rec = FeedbackRecord(**json.loads(line))
         except (json.JSONDecodeError, TypeError):
             continue
+        # Rows written before sign-offs were normalised still carry names.
+        rec.draft, rec.final = team_signoff(rec.draft), team_signoff(rec.final)
+        out.append(rec)
     return out
 
 

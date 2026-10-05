@@ -176,7 +176,7 @@ exists in the table and is still not allowed twice.
 
 | Question | Where the answer is |
 |---|---|
-| "Does it actually work, or is that a demo?" | `pytest -q` — 429 tests, no key needed |
+| "Does it actually work, or is that a demo?" | `pytest -q` — 433 tests, no key needed |
 | "What does it cost per case?" | `python -m sanwaad.obs` — p50/p95, budget, spend per step |
 | "What happens when a tool is down?" | scenario 4 above; the breaker stops calling it after 5 failures in a minute |
 | "What if something fails permanently?" | `python -m sanwaad.delivery` — three attempts, then dead-lettered with the customer's words |
