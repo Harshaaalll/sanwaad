@@ -52,7 +52,11 @@ class FeedbackRecord:
 
     @property
     def was_edited(self) -> bool:
-        return self.decision == "edit" and self.norm(self.draft) != self.norm(self.final)
+        # Judged on the text, not the button. Requiring decision == "edit"
+        # missed every approval sent with rewritten words, so the edit rate
+        # under-reported and exactly those corrections never became examples.
+        # A rejection sends nothing, so it is never an edit.
+        return self.decision != "reject" and self.norm(self.draft) != self.norm(self.final)
 
     @staticmethod
     def norm(t: str) -> str:
@@ -199,6 +203,21 @@ def few_shots(records: list[FeedbackRecord], category: str, n: int = 3) -> list[
     pool = [r for r in records if r.category == category and r.was_edited]
     pool.sort(key=lambda r: r.at, reverse=True)
     return [{"complaint": r.complaint, "reply": r.final} for r in pool[:n]]
+
+
+def learning_report(records: list[FeedbackRecord], shots_per_draft: int = 3) -> dict:
+    """What reviewers are teaching the system, per category, for the overview."""
+    by_cat: dict[str, dict] = {}
+    for r in records:
+        row = by_cat.setdefault(r.category, {"category": r.category, "reviewed": 0, "edited": 0, "rejected": 0})
+        row["reviewed"] += 1
+        row["edited"] += r.was_edited
+        row["rejected"] += r.decision == "reject"
+    for row in by_cat.values():
+        row["edit_rate"] = round(row["edited"] / row["reviewed"], 3)
+        row["examples_in_drafts"] = min(row["edited"], shots_per_draft)
+    return {**summarise(records),
+            "by_category": sorted(by_cat.values(), key=lambda r: (-r["reviewed"], r["category"]))}
 
 
 def render_few_shots(shots: list[dict]) -> str:

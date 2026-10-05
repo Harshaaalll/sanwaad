@@ -658,6 +658,18 @@ async def draft_node(state: GrievanceState) -> dict:
     # survive into it. Only the clauses are ours.
     comment_block = untrusted("customer_comment", minimal_text(state["complaint"]["text"]))
     summary_block = untrusted("triage_summary", triage["summary"])
+
+    # Replies reviewers rewrote for this category: the cheapest way to make the
+    # next draft sound like the last one a person approved. Fenced as untrusted
+    # because they quote customers, and facts still come only from the clauses;
+    # the grounding check runs on the result either way.
+    from ..feedback import few_shots, render_few_shots
+    from ..feedback import load as load_feedback
+
+    shots = few_shots(load_feedback(), triage["category"])
+    examples = ("\n\nReplies a reviewer edited and approved for this kind of complaint. Match their "
+                "tone and length; take facts only from the clauses above:\n"
+                + untrusted("reviewer_examples", render_few_shots(shots))) if shots else ""
     user = f"""Customer comment ({triage['sentiment']}, severity {triage['severity']}):
 {comment_block}
 
@@ -666,7 +678,7 @@ What they are reporting:
 reply_language: {triage['language']}
 
 Governing clauses (trusted policy):
-{format_citations(citations)}{incident}{correction}"""
+{format_citations(citations)}{examples}{incident}{correction}"""
 
     r = route("draft", severity=triage["severity"], revision=revision,
               injection_flagged=bool(state.get("injection_flagged")),
@@ -711,6 +723,13 @@ Governing clauses (trusted policy):
                  guardrail_blocked=guard.blocked,
                  violations=[v.rule for v in guard.violations])
 
+    # Say examples steered the draft only when a model actually read them; the
+    # offline stub and a degraded fallback never see the prompt.
+    model_read_prompt = not (cost.get("degraded") or cost.get("model") in NON_CALL_MODELS)
+    learned = ""
+    if shots:
+        learned = (f" · {len(shots)} reviewer-edited example(s) in the prompt" if model_read_prompt
+                   else f" · {len(shots)} reviewer example(s) available, not used ({cost.get('model')})")
     return {
         "draft": result.model_dump(mode="json"),
         "revision_count": revision + 1,
@@ -719,8 +738,9 @@ Governing clauses (trusted policy):
         "events": [event(
             "draft",
             f"{'revision ' + str(revision) if revision else 'first draft'} via {r.model}, "
-            f"{len(result.text.split())} words, cites {result.citations}"
+            f"{len(result.text.split())} words, cites {result.citations}{learned}"
             + (f" — GUARDRAIL {[v.rule for v in guard.violations]}" if guard.violations else ""),
+            reviewer_examples=len(shots) if model_read_prompt else 0,
         )],
     }
 

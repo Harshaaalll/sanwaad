@@ -16,7 +16,7 @@ const vm = require("node:vm");
 const HTML = fs.readFileSync(path.join(__dirname, "../../sanwaad/api/static/console.html"), "utf8");
 const SCRIPT = HTML.match(/<script>([\s\S]*)<\/script>/)[1];
 const EXPORTS = ["statusOf", "inFilter", "catLabel", "esc", "ago", "load", "renderList", "whyCard",
-                 "draftChanged", "review", "rejectCase", "niceMax", "momentumHtml", "volumeChart"];
+                 "draftChanged", "review", "rejectCase", "niceMax", "momentumHtml", "volumeChart", "learningHtml"];
 
 function fakeElement(id) {
   const classes = new Set();
@@ -272,4 +272,15 @@ test("the volume chart labels both lines at their last point and names today", (
   assert.match(svg, />Resolved 2</);
   assert.match(svg, />Today</);
   assert.match(svg, /aria-label="Complaints opened and resolved per day, last 14 days"/);
+});
+
+test("the learning card shows the edit rate per category, in plain words", () => {
+  const {api} = page();
+  const html = api.learningHtml({n: 10, edit_rate: 0.2, top_removed: [["regret", 3]], top_added: [["sorry", 2]],
+    by_category: [{category: "data_privacy", reviewed: 4, edited: 2, rejected: 0, edit_rate: 0.5, examples_in_drafts: 2}]});
+  assert.match(html, />20\.0%</);
+  assert.match(html, /Fraud &amp; privacy/);
+  assert.match(html, /class="poor">50\.0%/, "a category reviewers keep rewriting is flagged");
+  assert.match(html, /− regret/);
+  assert.match(api.learningHtml({n: 0}), /No reviews yet/);
 });
