@@ -7,9 +7,81 @@ case state the list shows, so a number here can always be traced to cases.
 
 from __future__ import annotations
 
+import statistics
 from collections import Counter
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
-from .config import HUMAN_COST_INR
+from .config import HUMAN_COST_INR, SLA_FIRST_RESPONSE_MINUTES
+
+TREND_DAYS = 14
+
+
+def _when(iso: Optional[str]) -> Optional[datetime]:
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def trends(cases: list[dict], now: Optional[datetime] = None) -> dict:
+    """What changed over time: daily volume, category momentum, first-response time.
+
+    All from timestamps the cases already carry (`opened_at`, `closed_at`, the
+    review's `decided_at`), so every point traces back to cases in the list.
+    """
+    now = now or datetime.now(timezone.utc)
+    today = now.date()
+    days = [today - timedelta(days=i) for i in range(TREND_DAYS - 1, -1, -1)]
+    index = {d: i for i, d in enumerate(days)}
+    opened, resolved = [0] * TREND_DAYS, [0] * TREND_DAYS
+    this_week, last_week = Counter(), Counter()
+    waits, oldest_waiting = [], None
+
+    for c in cases:
+        start = _when(c.get("opened_at"))
+        if start:
+            if start.date() in index:
+                opened[index[start.date()]] += 1
+            age = (now - start).days
+            category = (c.get("triage") or {}).get("category", "untriaged")
+            if age < 7:
+                this_week[category] += 1
+            elif age < 14:
+                last_week[category] += 1
+            if status_of(c) == "needs_review" and (oldest_waiting is None or start < oldest_waiting):
+                oldest_waiting = start
+        closed = _when(c.get("closed_at"))
+        if closed and closed.date() in index and (c.get("closure") or {}).get("resolved"):
+            resolved[index[closed.date()]] += 1
+        decided = _when((c.get("review") or {}).get("decided_at"))
+        if start and decided and decided >= start:
+            waits.append((decided - start).total_seconds() / 60)
+
+    momentum = [{"category": k, "this_week": this_week[k], "last_week": last_week[k],
+                 "change": this_week[k] - last_week[k]}
+                for k in sorted(set(this_week) | set(last_week),
+                                key=lambda k: (-this_week[k], -last_week[k], k))]
+    waits.sort()
+    within = sum(1 for w in waits if w <= SLA_FIRST_RESPONSE_MINUTES)
+    return {
+        "days": [d.isoformat() for d in days],
+        "opened": opened,
+        "resolved": resolved,
+        "momentum": momentum,
+        "first_response": {
+            "target_minutes": SLA_FIRST_RESPONSE_MINUTES,
+            "count": len(waits),
+            "median_minutes": round(statistics.median(waits), 1) if waits else None,
+            # Nearest-rank p90: the reply time nine in ten complaints beat.
+            "p90_minutes": round(waits[min(len(waits) - 1, int(0.9 * len(waits)))], 1) if waits else None,
+            "within_target": round(within / len(waits), 4) if waits else None,
+        },
+        "oldest_waiting_at": oldest_waiting.isoformat() if oldest_waiting else None,
+    }
 
 
 def status_of(case: dict) -> str:
@@ -33,7 +105,7 @@ def _human_decision(case: dict) -> str:
 
 
 def summarise(cases: list[dict], *, dead_letters: int = 0,
-              autonomy: list[dict] | None = None) -> dict:
+              autonomy: list[dict] | None = None, now: Optional[datetime] = None) -> dict:
     statuses = Counter(status_of(c) for c in cases)
     triages = [c.get("triage") or {} for c in cases]
     reviews = [c["review"] for c in cases if c.get("review")]
@@ -96,4 +168,5 @@ def summarise(cases: list[dict], *, dead_letters: int = 0,
         "incidents": sorted(incidents.values(), key=lambda i: (i["level"] != "crisis", -i["cases"])),
         "dead_letters": dead_letters,
         "autonomy": autonomy or [],
+        "trends": trends(cases, now),
     }

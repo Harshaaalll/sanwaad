@@ -175,3 +175,52 @@ async def test_a_case_from_the_api_carries_its_explanation(monkeypatch, tmp_path
     assert x["review"]["at_the_time"]["allowed"] is False
     assert overview["total"] == 1
     await pipeline.close_sessions()
+
+
+# --- trends ---------------------------------------------------------------------
+
+def test_trends_bucket_by_day_and_compare_the_last_two_weeks():
+    from datetime import datetime, timezone
+
+    from sanwaad.overview import trends
+
+    now = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
+    cases = [
+        _case(opened_at="2026-10-05T09:00:00+00:00", draft={"text": "x"}),               # today, waiting
+        _case(opened_at="2026-10-03T09:00:00+00:00", closed_at="2026-10-04T10:00:00+00:00",
+              closure={"resolved": True}, review={"decided_at": "2026-10-03T10:30:00+00:00"}),
+        _case(opened_at="2026-09-28T09:00:00+00:00", triage={"category": "billing", "severity": 2},
+              review={"decided_at": "2026-09-28T15:00:00+00:00"}),                       # last week
+        _case(opened_at="2026-08-01T09:00:00", closure={"resolved": True}),              # too old, naive time
+    ]
+    t = trends(cases, now)
+    assert t["days"][-1] == "2026-10-05" and len(t["days"]) == 14
+    assert t["opened"][-1] == 1 and t["opened"][-3] == 1 and sum(t["opened"]) == 3
+    assert t["resolved"][-2] == 1 and sum(t["resolved"]) == 1
+    by = {m["category"]: m for m in t["momentum"]}
+    assert by["refund"] == {"category": "refund", "this_week": 2, "last_week": 0, "change": 2}
+    assert by["billing"]["change"] == -1
+    assert t["oldest_waiting_at"] == "2026-10-05T09:00:00+00:00"
+
+
+def test_first_response_reports_median_p90_and_share_within_target(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from sanwaad import overview
+
+    monkeypatch.setattr(overview, "SLA_FIRST_RESPONSE_MINUTES", 60)
+    start = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
+    cases = [_case(opened_at=start.isoformat(),
+                   review={"decided_at": (start + timedelta(minutes=m)).isoformat()})
+             for m in (10, 20, 30, 50, 300)]
+    fr = overview.trends(cases, start + timedelta(days=1))["first_response"]
+    assert fr["median_minutes"] == 30.0
+    assert fr["p90_minutes"] == 300.0          # nearest rank: the slowest of five
+    assert fr["within_target"] == 0.8 and fr["count"] == 5
+
+
+def test_a_case_with_no_timestamps_adds_nothing_to_the_trends():
+    from sanwaad.overview import trends
+
+    t = trends([_case(draft={"text": "x"})])
+    assert sum(t["opened"]) == 0 and t["momentum"] == [] and t["first_response"]["count"] == 0

@@ -15,16 +15,22 @@
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Devanagari", sans-serif;
     --radius: 10px;
+    --s1:#2a78d6; --s2:#eb6834; --grid:#e6e9ef; --axis:#b7bfcc; --muted-mark:#b4bccb;
+    --brand:#25237a; --brand-ink:#ffffff; --brand-dim:#c9c8f0; --marigold:#f2a93b;
   }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
     --bg:#0f1218; --panel:#171b23; --panel-2:#1e2430; --line:#2a313e; --fg:#e7eaf0; --dim:#9aa4b6;
     --accent:#6f9cff; --on-accent:#08132b; --accent-soft:#1c2a4a;
     --ok:#46cf92; --control:#687388; --ok-soft:#133528; --warn:#f0b43c; --warn-soft:#3a2d12; --bad:#f07068; --bad-soft:#3d1c1a;
+    --s1:#3987e5; --s2:#d95926; --grid:#262d39; --axis:#3a4352; --muted-mark:#4b5566;
+    --brand:#1f1d5c; --brand-ink:#ffffff; --brand-dim:#b7b5ea; --marigold:#f2a93b;
     color-scheme: dark; } }
   :root[data-theme="dark"] {
     --bg:#0f1218; --panel:#171b23; --panel-2:#1e2430; --line:#2a313e; --fg:#e7eaf0; --dim:#9aa4b6;
     --accent:#6f9cff; --on-accent:#08132b; --accent-soft:#1c2a4a;
     --ok:#46cf92; --control:#687388; --ok-soft:#133528; --warn:#f0b43c; --warn-soft:#3a2d12; --bad:#f07068; --bad-soft:#3d1c1a;
+    --s1:#3987e5; --s2:#d95926; --grid:#262d39; --axis:#3a4352; --muted-mark:#4b5566;
+    --brand:#1f1d5c; --brand-ink:#ffffff; --brand-dim:#b7b5ea; --marigold:#f2a93b;
     color-scheme: dark; }
 
   * { box-sizing:border-box; }
@@ -201,6 +207,50 @@
   input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); }
   select { background:var(--panel); color:var(--fg); border:1px solid var(--control); border-radius:6px; padding:4px 8px; font:inherit; font-size:12px; }
 
+
+  /* Overview: a brand band with the one headline number, then data */
+  .band { display:flex; justify-content:space-between; align-items:flex-end; gap:20px; flex-wrap:wrap;
+          background:var(--brand); color:var(--brand-ink); border-radius:14px; padding:22px 26px; margin-bottom:16px; }
+  .band p { margin:6px 0 0; color:var(--brand-dim); }
+  .band-kicker { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--brand-dim); }
+  .band-kicker::first-letter { color:var(--marigold); }
+  .hero { font-size:56px; font-weight:650; line-height:1.05; margin-top:6px; display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .hero span { font-size:18px; font-weight:500; }
+  .band-side { display:grid; gap:10px; justify-items:end; }
+  .band-alert { background:var(--marigold); color:#1a1300; font-weight:600; font-size:13px; padding:4px 12px; border-radius:99px; }
+  .band-cta { background:var(--brand-ink); color:var(--brand); border-color:transparent; font-weight:600; padding:9px 16px; }
+  .band-cta:focus-visible { outline-color:var(--marigold); }
+  .kpis .tile h3 { margin-bottom:6px; }
+  .tile-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .tile .kpi { font-family:var(--sans); font-weight:650; font-size:28px; }
+  .spark { flex:none; }
+  .meter { height:8px; border-radius:99px; background:var(--accent-soft); overflow:hidden; margin-top:10px; }
+  .meter span { display:block; height:100%; background:var(--accent); border-radius:99px; }
+  .meter.ok { background:var(--ok-soft); } .meter.ok span { background:var(--ok); }
+  .meter.warn { background:var(--warn-soft); } .meter.warn span { background:var(--warn); }
+  .meter.bad { background:var(--bad-soft); } .meter.bad span { background:var(--bad); }
+  .viz-grid { display:grid; grid-template-columns:minmax(0, 3fr) minmax(0, 2fr); gap:14px; margin-bottom:16px; }
+  .viz-grid > .card { margin-bottom:0; }
+  .chart-box { width:100%; min-height:230px; }
+  .chart-box svg { display:block; max-width:100%; height:auto; }
+  .chart-box .axis { fill:var(--dim); font-size:11px; font-variant-numeric:tabular-nums; }
+  .chart-box .endlabel { fill:var(--fg); font-size:12px; font-weight:600; }
+  .legend i { border-radius:50%; }
+  .table-view { margin-top:8px; font-size:12px; }
+  .table-view summary { cursor:pointer; color:var(--dim); }
+  .momentum { display:grid; gap:7px; }
+  .mrow { display:grid; grid-template-columns:minmax(90px, 130px) 1fr 76px; gap:10px; align-items:center; font-size:13px; }
+  .mtrack { display:flex; align-items:center; gap:6px; min-width:0; }
+  .mbar { height:14px; background:var(--s1); border-radius:0 4px 4px 0; min-width:3px; }
+  .mval { font-variant-numeric:tabular-nums; color:var(--fg); font-weight:600; }
+  .delta { font-size:12px; white-space:nowrap; font-weight:600; text-align:right; }
+  .delta.up { color:var(--bad); } .delta.down { color:var(--ok); } .delta.flat { color:var(--dim); font-weight:400; }
+  #viz-tip { position:fixed; z-index:40; pointer-events:none; background:var(--panel); color:var(--fg);
+             border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:12px; display:grid; gap:3px;
+             box-shadow:0 6px 18px rgba(0,0,0,.18); }
+  #viz-tip[hidden] { display:none; }
+  #viz-tip i { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+
   /* Narrow screens: queue and case stack; the header tabs scroll */
   @media (max-width: 900px) {
     header { padding:8px 12px; gap:8px; flex-wrap:wrap; }
@@ -215,6 +265,9 @@
     .timeline div { grid-template-columns:1fr; gap:2px; }
     .complaint { font-size:16px; }
     .sys-pop { width:min(300px, calc(100vw - 24px)); }
+    .viz-grid { grid-template-columns:1fr; }
+    .hero { font-size:44px; }
+    .band-side { justify-items:start; }
     .wide-only { display:none; }
     #sys-label { max-width:34vw; overflow:hidden; text-overflow:ellipsis; }
     .sys-btn { padding:5px 10px; }
@@ -264,6 +317,7 @@
 <div class="models" id="view-models" hidden></div>
 <div class="models" id="view-policy" hidden></div>
 <div id="toasts" aria-live="polite" aria-atomic="false"></div>
+<div id="viz-tip" role="tooltip" hidden></div>
 
 <script>
 let cases = [], selected = null, filter = null;
@@ -915,45 +969,165 @@ function hbars(obj) {
     <div style="width:${n / max * 100}%"></div><span>${n}</span></div>`).join("") || '<p class="muted">—</p>';
 }
 
+// --- Charts: inline SVG, no library. Specs from the dataviz method: 2px lines,
+// >=8px end dots with a surface ring, hairline grid, legend + end labels for two
+// series, a crosshair tooltip, and a table view so nothing is colour-only.
+
+const fmtDay = iso => new Date(iso + "T00:00:00").toLocaleDateString(undefined, {day: "numeric", month: "short"});
+const minutes = m => m == null ? "—" : m < 60 ? `${Math.round(m)} min` : m < 1440 ? `${(m / 60).toFixed(1)} h` : `${(m / 1440).toFixed(1)} d`;
+
+function niceMax(v) {
+  if (v <= 4) return 4;
+  const step = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 4, 5, 6, 8, 10]) if (m * step >= v) return m * step;
+  return 10 * step;
+}
+
+function sparkline(values, label) {
+  const w = 120, h = 32, max = Math.max(1, ...values), n = values.length;
+  const x = i => 4 + i * (w - 8) / Math.max(1, n - 1), y = v => h - 5 - v * (h - 10) / max;
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${esc(label)}">
+    <polyline points="${pts}" fill="none" stroke="var(--muted-mark)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${x(n - 1)}" cy="${y(values[n - 1])}" r="4" fill="var(--s1)" stroke="var(--panel)" stroke-width="2"/></svg>`;
+}
+
+function volumeChart(t, width) {
+  const series = [{key: "opened", label: "Opened", color: "var(--s1)"}, {key: "resolved", label: "Resolved", color: "var(--s2)"}];
+  const W = Math.max(300, width), H = 230, L = 34, R = 92, T = 12, B = 28;
+  const n = t.days.length, max = niceMax(Math.max(...t.opened, ...t.resolved));
+  const x = i => L + i * (W - L - R) / (n - 1), y = v => T + (H - T - B) * (1 - v / max);
+  const ticks = [0, max / 4, max / 2, 3 * max / 4, max].filter(v => Number.isInteger(v));
+  const grid = ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>
+    <text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" class="axis">${v}</text>`).join("");
+  const labelAt = [0, Math.floor((n - 1) / 2), n - 1];
+  const xlabels = labelAt.map(i => `<text x="${x(i)}" y="${H - 8}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}"
+    class="axis">${i === n - 1 ? "Today" : fmtDay(t.days[i])}</text>`).join("");
+  // End labels, nudged apart only when they would overlap.
+  let ends = series.map(s => ({...s, v: t[s.key][n - 1], y: y(t[s.key][n - 1])}));
+  if (Math.abs(ends[0].y - ends[1].y) < 14) { const mid = (ends[0].y + ends[1].y) / 2; ends[0].y = mid - 8; ends[1].y = mid + 8; }
+  const lines = series.map(s => `<polyline points="${t[s.key].map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"
+      fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${x(n - 1)}" cy="${y(t[s.key][n - 1])}" r="4" fill="${s.color}" stroke="var(--panel)" stroke-width="2"/>`).join("");
+  const endLabels = ends.map(e => `<text x="${x(n - 1) + 10}" y="${e.y + 4}" class="endlabel">${e.label} ${e.v}</text>`).join("");
+  return `<svg id="vol-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img"
+      aria-label="Complaints opened and resolved per day, last ${n} days">
+    ${grid}${xlabels}${lines}${endLabels}
+    <line id="vol-cross" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--axis)" stroke-width="1" visibility="hidden"/>
+    <rect id="vol-hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"
+      data-l="${L}" data-step="${(W - L - R) / (n - 1)}"/></svg>`;
+}
+
+function bindVolumeHover(t) {
+  const hit = document.getElementById("vol-hit"), cross = document.getElementById("vol-cross");
+  if (!hit || !hit.addEventListener) return;
+  const tip = document.getElementById("viz-tip");
+  const at = e => {
+    const box = hit.ownerSVGElement.getBoundingClientRect();
+    const sx = (e.clientX - box.left) * (hit.ownerSVGElement.viewBox.baseVal.width / box.width);
+    return Math.max(0, Math.min(t.days.length - 1, Math.round((sx - Number(hit.dataset.l)) / Number(hit.dataset.step))));
+  };
+  hit.addEventListener("mousemove", e => {
+    const i = at(e), cx = Number(hit.dataset.l) + i * Number(hit.dataset.step);
+    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
+    tip.innerHTML = `<b>${i === t.days.length - 1 ? "Today" : fmtDay(t.days[i])}</b>
+      <span><i style="background:var(--s1)"></i>Opened ${t.opened[i]}</span>
+      <span><i style="background:var(--s2)"></i>Resolved ${t.resolved[i]}</span>`;
+    tip.hidden = false;
+    tip.style.left = `${Math.min(innerWidth - 170, e.clientX + 14)}px`; tip.style.top = `${e.clientY + 14}px`;
+  });
+  hit.addEventListener("mouseleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); });
+}
+
+function momentumHtml(rows) {
+  if (!rows.length) return '<p class="muted" style="margin:0">No complaints in the last two weeks.</p>';
+  const max = Math.max(1, ...rows.map(r => r.this_week));
+  return `<div class="momentum">${rows.slice(0, 8).map(r => {
+    const dir = r.change > 0 ? `<span class="delta up" title="More than last week">▲ ${r.change}</span>`
+      : r.change < 0 ? `<span class="delta down" title="Fewer than last week">▼ ${-r.change}</span>`
+      : '<span class="delta flat">no change</span>';
+    return `<div class="mrow"><span class="mlabel">${esc(catLabel(r.category))}</span>
+      <span class="mtrack"><span class="mbar" style="width:${r.this_week / max * 100}%"></span>
+        <span class="mval">${r.this_week}</span></span>${dir}</div>`;
+  }).join("")}</div>
+  <p class="note">Bars: complaints opened in the last 7 days. Arrows: change against the 7 days before. More complaints is shown as ▲ in red.</p>`;
+}
+
 async function loadOverview() {
   health();
   const el = document.getElementById("view-overview");
   let o;
   try { o = await (await fetch("/api/overview")).json(); }
-  catch { el.innerHTML = '<p class="muted">Could not reach /api/overview.</p>'; return; }
+  catch { el.innerHTML = '<p class="muted">Couldn\'t load the overview. Check that the server is running, then press Refresh.</p>'; return; }
   if (!o.total) {
-    el.innerHTML = '<h2>Overview</h2><p class="muted">No cases yet. Ingest the mock feed to begin.</p>';
+    el.innerHTML = `<div class="band"><div><div class="band-kicker">संवाद · Overview</div>
+      <div class="hero">No complaints yet</div>
+      <p>Load sample complaints from the Cases tab to see the overview fill in.</p></div></div>`;
     return;
   }
-  const s = o.status, r = o.reviews, out = o.outcomes, c = o.cost;
-  const kpi = (label, value, sub) => `<div class="card"><h3>${label}</h3>
-    <div class="kpi">${value}</div>${sub ? `<p class="note">${sub}</p>` : ""}</div>`;
+  const s = o.status, r = o.reviews, out = o.outcomes, c = o.cost, t = o.trends, fr = t.first_response;
+  const waiting = s.needs_review || 0;
+  const within = fr.within_target;
+  const meterCls = within == null ? "" : within >= 0.9 ? "ok" : within >= 0.7 ? "warn" : "bad";
+  const opened14 = t.opened.reduce((a, b) => a + b, 0), resolved14 = t.resolved.reduce((a, b) => a + b, 0);
+  const tile = (label, value, sub, extra = "") => `<div class="card tile"><h3>${label}</h3>
+    <div class="tile-row"><div class="kpi">${value}</div>${extra}</div>${sub ? `<p class="note">${sub}</p>` : ""}</div>`;
+
   el.innerHTML = `
-    <h2>Overview</h2>
-    <p class="muted" style="margin:0 0 16px">${o.total} cases · ${o.untagged} found without a tag</p>
-    <div class="grid">
-      ${kpi("Waiting on a person", s.needs_review || 0, `${s.awaiting_call || 0} more owed a callback`)}
-      ${kpi("Resolved", `${out.resolved} <small>of ${out.closed} closed</small>`,
-            out.resolved_rate == null ? "" : `${pct(out.resolved_rate)} resolved · ${out.degraded} with a degraded step`)}
-      ${kpi("Posted without a person", r.auto_rate == null ? "—" : pct(r.auto_rate),
-            `${r.auto} auto · ${r.human} human (${r.approved_unchanged} approved as drafted, ${r.edited} edited, ${r.rejected} rejected)`)}
-      ${kpi("Model cost per closed case", c.avg_per_closed_case_inr == null ? "—" : `₹${num(c.avg_per_closed_case_inr, 4)}`,
-            c.total_inr === 0 ? "₹0 because models ran offline (no API key): these are stubs, not real costs"
-              : `vs ~₹${c.human_reply_inr} for a person to write the reply · ₹${num(c.total_inr, 4)} spent in all`)}
+    <section class="band" aria-label="Today">
+      <div>
+        <div class="band-kicker">संवाद · Overview · ${new Date().toLocaleDateString(undefined, {weekday: "long", day: "numeric", month: "long"})}</div>
+        <div class="hero">${waiting}<span>${waiting === 1 ? "complaint is" : "complaints are"} waiting on a person</span></div>
+        <p>${t.oldest_waiting_at ? `The oldest has waited ${esc(ago(t.oldest_waiting_at).replace(" ago", ""))}. ` : ""}${s.awaiting_call || 0} more owe a callback.</p>
+      </div>
+      <div class="band-side">
+        ${o.incidents.length ? `<div class="band-alert">● ${o.incidents.length} incident${o.incidents.length > 1 ? "s" : ""} active</div>` : ""}
+        <button class="band-cta" onclick="filter='needs_review'; show('cases')">Open the review queue →</button>
+      </div>
+    </section>
+
+    <div class="grid kpis">
+      ${tile("Opened · last 14 days", opened14, `${t.opened[t.opened.length - 1]} today`, sparkline(t.opened, "Opened per day"))}
+      ${tile("Resolved · last 14 days", resolved14, out.resolved_rate == null ? "" :
+            `${pct(out.resolved_rate)} of closed cases resolved`, sparkline(t.resolved, "Resolved per day"))}
+      <div class="card tile"><h3>First reply</h3>
+        <div class="tile-row"><div class="kpi">${minutes(fr.median_minutes)}</div><span class="muted">median</span></div>
+        ${within == null ? '<p class="note">No replies yet.</p>' : `
+        <div class="meter ${meterCls}" role="img" aria-label="${pct(within)} replied within ${minutes(fr.target_minutes)}">
+          <span style="width:${within * 100}%"></span></div>
+        <p class="note">${pct(within)} within the ${minutes(fr.target_minutes)} target · 9 in 10 within ${minutes(fr.p90_minutes)}</p>`}
+      </div>
+      ${tile("Posted without a person", r.auto_rate == null ? "—" : pct(r.auto_rate),
+            `${r.human} reviewed: ${r.approved_unchanged} approved as drafted, ${r.edited} edited, ${r.rejected} rejected`)}
+    </div>
+
+    <div class="viz-grid">
+      <div class="card"><h3>Complaints per day</h3>
+        <div class="legend" style="margin-bottom:6px"><span><i style="background:var(--s1)"></i>Opened</span>
+          <span><i style="background:var(--s2)"></i>Resolved</span></div>
+        <div id="vol-chart" class="chart-box"></div>
+        <details class="table-view"><summary>Show as table</summary>
+          <table class="t"><tr><th>Day</th><th>Opened</th><th>Resolved</th></tr>
+          ${t.days.map((d, i) => `<tr><td>${fmtDay(d)}</td><td>${t.opened[i]}</td><td>${t.resolved[i]}</td></tr>`).reverse().join("")}</table>
+        </details>
+      </div>
+      <div class="card"><h3>What people are complaining about</h3>${momentumHtml(t.momentum)}</div>
     </div>
 
     ${o.incidents.length || o.dead_letters ? `<div class="card"><h3>Needs attention</h3>
-      ${o.incidents.map(i => `<div class="clause"><span class="pill ${i.level === 'crisis' ? 's5' : 's3'}">${esc(i.level)}</span>
+      ${o.incidents.map(i => `<div class="clause"><span class="pill ${i.level === 'crisis' ? 'bad' : 'warn'}">${i.level === "crisis" ? "Incident" : "Similar reports"}</span>
         <b>${esc(i.theme)}</b> — ${i.cases} cases here, cluster of ${i.cluster_size}</div>`).join("")}
-      ${o.dead_letters ? `<div class="clause"><span class="pill s5">dead-lettered</span> ${o.dead_letters} item(s) gave up after
+      ${o.dead_letters ? `<div class="clause"><span class="pill bad">Failed</span> ${o.dead_letters} item(s) gave up after
         retries — <code>python -m sanwaad.delivery</code></div>` : ""}
     </div>` : ""}
 
     <div class="grid">
-      <div class="card"><h3>By category</h3>${hbars(Object.fromEntries(Object.entries(o.by_category).map(([k, n]) => [catLabel(k), n])))}</div>
       <div class="card"><h3>By severity</h3>${hbars(Object.fromEntries(Object.entries(o.by_severity).map(([k, n]) => [`${k} · ${SEVERITY[k] || ""}`, n])))}</div>
       <div class="card"><h3>By queue tier</h3>${hbars(Object.fromEntries(Object.entries(o.by_tier).map(([k, n]) => [TIER[k] || k, n])))}</div>
       <div class="card"><h3>By author</h3>${hbars(Object.fromEntries(Object.entries(o.by_author).map(([k, n]) => [AUTHOR[k] || k, n])))}</div>
+      ${tile("Model cost per closed case", c.avg_per_closed_case_inr == null ? "—" : `₹${num(c.avg_per_closed_case_inr, 4)}`,
+            c.total_inr === 0 ? "₹0 because models ran offline (no API key): these are stubs, not real costs"
+              : `vs ~₹${c.human_reply_inr} for a person to write the reply · ₹${num(c.total_inr, 4)} spent in all`)}
     </div>
 
     <div class="card"><h3>What the system has earned the right to do alone</h3>
@@ -964,6 +1138,9 @@ async function loadOverview() {
       <p class="note">Approving a draft unchanged counts as agreement; editing or rejecting doesn't.
         Severity above 3 and any money move always stay with a person.</p>
     </div>`;
+  const box = document.getElementById("vol-chart");
+  box.innerHTML = volumeChart(t, box.clientWidth || 640);
+  bindVolumeHover(t);
 }
 
 // ---------------------------------------------------------------------------

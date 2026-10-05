@@ -212,5 +212,8 @@ async def list_cases() -> list[dict]:
                 "cost_inr": round(sum(float(c.get("inr", 0.0))
                                       for c in values.get("costs") or []), 6),
                 "opened_at": ((values.get("events") or [{}])[0]).get("at"),
+                # The close node writes the last event, so its time is the close time.
+                "closed_at": ((values.get("events") or [{}])[-1]).get("at")
+                             if values.get("closure") else None,
             }
     return list(seen.values())
