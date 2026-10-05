@@ -287,19 +287,25 @@ pytest tests/ -q                           # 466 tests, no API key
 node --test tests/js/*.test.js                      # the console's own logic (pytest runs it too)
 ```
 
-### A free live link (Hugging Face Spaces)
+### A live link for free (GitHub Codespaces)
 
-The Dockerfile runs as-is on a free Hugging Face Space, which builds the image
-on Hugging Face's machines, so nothing heavy happens locally:
+The repo carries a codespace config, so a cloud machine sets itself up and
+nothing runs on your laptop. On GitHub: **Code → Codespaces → Create codespace
+on main**, wait for the setup to finish, then in its terminal:
 
 ```bash
-pip install huggingface_hub && hf auth login          # once
-python scripts/deploy_hf_space.py --space <you>/sanwaad --set-admin
+python -m sanwaad.auth add-user --email you@company.com --name "You" --role admin
+python -m sanwaad.api.server
 ```
 
-`--set-admin` prompts for the admin sign-in and stores it as Space secrets; the
-server creates that admin at start whenever no account exists. The free tier's
-disk resets on restart, so cases and extra accounts don't persist there.
+In the **Ports** tab, right-click port 7870 → **Port visibility → Public**,
+and share the forwarded `https://…app.github.dev` address; visitors get the
+sign-in page. The link works while the codespace runs (it stops after a period
+of inactivity; restart it from GitHub). Accounts and cases persist inside the
+codespace until you delete it.
+
+A Hugging Face Space also works (`scripts/deploy_hf_space.py --space <you>/sanwaad
+--set-admin`), but Docker Spaces now need a PRO subscription.
 
 Or in Docker, where that download already happened at build time:
 

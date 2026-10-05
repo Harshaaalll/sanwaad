@@ -1,4 +1,8 @@
-"""Deploy the review console to a free Hugging Face Space (Docker).
+"""Deploy the review console to a Hugging Face Space (Docker).
+
+Docker Spaces need a Hugging Face PRO subscription (the create call answers
+402 without one); for a free live link use the GitHub Codespaces config in
+.devcontainer/ instead (see README).
 
     hf auth login                                   # once, on this machine
     python scripts/deploy_hf_space.py --space <you>/sanwaad --set-admin
