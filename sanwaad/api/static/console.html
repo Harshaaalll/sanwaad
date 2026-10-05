@@ -1053,6 +1053,24 @@ function momentumHtml(rows) {
   <p class="note">Bars: complaints opened in the last 7 days. Arrows: change against the 7 days before. More complaints is shown as ▲ in red.</p>`;
 }
 
+function learningHtml(l) {
+  if (!l || !l.n) return `<p class="muted" style="margin:0">No reviews yet. Every reply a reviewer changes becomes an
+    example the next draft for that category learns from.</p>`;
+  const words = (list, sign) => (list || []).slice(0, 6).map(([w, n]) =>
+    `<span class="pill">${sign} ${esc(w)} <b>${n}</b></span>`).join("") || '<span class="muted">none yet</span>';
+  return `<div class="tile-row" style="margin-bottom:10px"><div><div class="kpi">${pct(l.edit_rate)}</div>
+      <span class="muted">of ${l.n} reviewed drafts were changed by a person</span></div></div>
+    <table class="t"><tr><th>Category</th><th>Reviewed</th><th>Changed</th><th>Rejected</th><th>Examples in new drafts</th></tr>
+    ${l.by_category.map(c => `<tr><td>${esc(catLabel(c.category))}</td><td>${c.reviewed}</td>
+      <td class="${c.edit_rate >= .3 ? "poor" : ""}">${pct(c.edit_rate)}</td><td>${c.rejected}</td>
+      <td>${c.examples_in_drafts}</td></tr>`).join("")}</table>
+    <div class="sub">Words reviewers remove</div><div class="row">${words(l.top_removed, "−")}</div>
+    <div class="sub">Words reviewers add</div><div class="row">${words(l.top_added, "+")}</div>
+    <p class="note">A changed reply is fed back as an example (up to 3 per category) into the next draft's prompt,
+      after identifiers are removed. Facts still come only from policy, and every draft is still checked against it.
+      A falling "Changed" rate is the sign drafts are getting closer to what your team sends.</p>`;
+}
+
 async function loadOverview() {
   health();
   const el = document.getElementById("view-overview");
@@ -1113,6 +1131,8 @@ async function loadOverview() {
       </div>
       <div class="card"><h3>What people are complaining about</h3>${momentumHtml(t.momentum)}</div>
     </div>
+
+    <div class="card"><h3>What reviewers are teaching it</h3>${learningHtml(o.learning)}</div>
 
     ${o.incidents.length || o.dead_letters ? `<div class="card"><h3>Needs attention</h3>
       ${o.incidents.map(i => `<div class="clause"><span class="pill ${i.level === 'crisis' ? 'bad' : 'warn'}">${i.level === "crisis" ? "Incident" : "Similar reports"}</span>

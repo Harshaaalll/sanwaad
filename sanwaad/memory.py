@@ -111,7 +111,7 @@ MEMORY_MAP: list[MemoryTier] = [
         ("sanwaad.feedback", "FEEDBACK_PATH"),
         "What the model drafted vs what a reviewer actually sent",
         365, True,
-        "Selected approved edits, retrieved as few-shot examples",
+        "Up to 3 recent reviewer-edited replies per category, fenced as untrusted in the draft prompt",
         "Identifiers redacted at write time",
         "The cheapest training data available: the work was happening anyway."),
     MemoryTier(

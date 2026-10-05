@@ -123,6 +123,13 @@ hard bounds, each with a reason, an impact preview on stored cases, and an
 append-only, revertible log. The grounding rule and the ban on auto-promised
 compensation can't be changed there at all.
 
+**Drafts learn from reviewers.** When a reviewer changes a reply before
+approving it, that rewrite (identifiers removed) becomes one of up to three
+examples in the next draft prompt for the same category, fenced as untrusted
+text that can't override instructions; facts still come only from policy. The
+timeline says when examples were in the prompt, and the Overview tracks the
+edit rate per category, the number that should fall as drafts improve.
+
 **The triage model is measured, not assumed.** Triage runs behind one interface
 with three backends: Gemini, Laya (an open-weight decision model that runs
 locally and reports calibrated confidence) and Jev (TypeSafe AI, hosted; not yet
@@ -276,7 +283,7 @@ python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
 python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
-pytest tests/ -q                           # 424 tests, no API key
+pytest tests/ -q                           # 429 tests, no API key
 node --test tests/js/*.test.js                      # the console's own logic (pytest runs it too)
 ```
 
@@ -312,7 +319,9 @@ Murf keys.
   resolved per day, what people are complaining about this week against last,
   first-reply time against a target (`SANWAAD_SLA_FIRST_RESPONSE_MINUTES`,
   default 4 hours), how much posts without a person and how reviewers decided,
-  model cost per case, incidents, and the autonomy each reply type has earned.
+  model cost per case, incidents, the autonomy each reply type has earned,
+  and what reviewers are teaching it: the edit rate per category and the
+  words they most often remove or add.
 - **Model comparison** — the latest `triage_compare` run.
 - **Policy** — every threshold, as the running server has it.
 
@@ -412,7 +421,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            424 tests
+tests/            429 tests
 scripts/          pre-commit (the test gate for git)
 .claude/          Claude Code settings: the test gate hooks, the /handoff skill
 CLAUDE.md         how to work on this repo, for Claude Code

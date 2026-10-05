@@ -335,10 +335,13 @@ async def api_policy_search(q: str, k: int = 5):
 
 @app.get("/api/overview")
 async def api_overview():
+    from sanwaad import feedback
     from sanwaad.overview import summarise
 
-    return summarise(await list_cases(), dead_letters=len(DELIVERY.dead()),
-                     autonomy=AUTONOMY.report())
+    out = summarise(await list_cases(), dead_letters=len(DELIVERY.dead()),
+                    autonomy=AUTONOMY.report())
+    out["learning"] = feedback.learning_report(feedback.load())
+    return out
 
 
 @app.get("/api/settings")
