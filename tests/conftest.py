@@ -9,9 +9,16 @@
   with a lowered auto-post threshold.
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 
-from sanwaad import auth, policy_store
+# Plain `pytest` (as CI runs it) loads this before any test file adds the repo to
+# sys.path the way each of them does, so do the same here.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sanwaad import auth, policy_store  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
