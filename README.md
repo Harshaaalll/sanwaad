@@ -276,7 +276,8 @@ python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
 python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
-pytest tests/ -q                           # 420 tests, no API key
+pytest tests/ -q                           # 421 tests, no API key
+node --test tests/js/                      # the console's own logic (pytest runs it too)
 ```
 
 Or in Docker, where that download already happened at build time:
@@ -409,7 +410,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            420 tests
+tests/            421 tests
 scripts/          pre-commit (the test gate for git)
 .claude/          Claude Code settings: the test gate hooks, the /handoff skill
 CLAUDE.md         how to work on this repo, for Claude Code
