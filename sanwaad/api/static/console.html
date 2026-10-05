@@ -251,6 +251,18 @@
   #viz-tip[hidden] { display:none; }
   #viz-tip i { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
 
+  /* Accounts */
+  .who-chip { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--dim); white-space:nowrap; }
+  .who-chip b { color:var(--fg); font-weight:600; }
+  .open-banner { background:var(--warn-soft); color:var(--fg); border-bottom:1px solid var(--line); padding:7px 18px; font-size:13px; }
+  .login { position:fixed; inset:0; z-index:50; background:var(--bg); display:grid; place-items:center; padding:16px; }
+  .login[hidden] { display:none; }
+  table.team th, table.team td { text-align:left; }
+  .login-card { width:min(380px, 100%); display:grid; gap:8px; padding:26px; }
+  .login-card h2 { margin:2px 0 10px; font-size:20px; }
+  .login-card input { width:100%; }
+  .login-card button { margin-top:6px; padding:9px; }
+
   /* Narrow screens: queue and case stack; the header tabs scroll */
   @media (max-width: 900px) {
     header { padding:8px 12px; gap:8px; flex-wrap:wrap; }
@@ -269,6 +281,7 @@
     .hero { font-size:44px; }
     .band-side { justify-items:start; }
     .wide-only { display:none; }
+    .who-chip .role { display:none; }
     #sys-label { max-width:34vw; overflow:hidden; text-overflow:ellipsis; }
     .sys-btn { padding:5px 10px; }
   }
@@ -282,6 +295,7 @@
     <button id="tab-overview" onclick="show('overview')">Overview</button>
     <button id="tab-models" onclick="show('models')">Model comparison</button>
     <button id="tab-policy" onclick="show('policy')">Policy</button>
+    <button id="tab-team" onclick="show('team')">Team</button>
   </nav>
   <span class="spacer"></span>
   <div class="sys" id="sys">
@@ -289,6 +303,7 @@
       <span class="dot" id="sys-dot"></span><span id="sys-label">Checking…</span></button>
     <div class="sys-pop" id="sys-pop" hidden></div>
   </div>
+  <span id="who" class="who-chip"></span>
   <button class="ghost" id="theme-btn" onclick="toggleTheme()" aria-label="Switch light or dark theme"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" style="vertical-align:-2px"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg><span class="wide-only"> Theme</span></button>
 </header>
 
@@ -316,6 +331,20 @@
 <div class="models" id="view-overview" hidden></div>
 <div class="models" id="view-models" hidden></div>
 <div class="models" id="view-policy" hidden></div>
+<div class="models" id="view-team" hidden></div>
+<div id="login" class="login" hidden>
+  <form class="card login-card" onsubmit="signIn(event)">
+    <div class="band-kicker" style="color:var(--dim)">संवाद · Sanwaad</div>
+    <h2>Sign in to the review console</h2>
+    <label class="field" for="login-email">Work email</label>
+    <input id="login-email" type="email" autocomplete="username" required>
+    <label class="field" for="login-password">Password</label>
+    <input id="login-password" type="password" autocomplete="current-password" required>
+    <p id="login-error" class="callout bad" hidden></p>
+    <button class="primary" type="submit" id="login-btn">Sign in</button>
+    <p class="note">No account? Ask an admin on your team to add you.</p>
+  </form>
+</div>
 <div id="toasts" aria-live="polite" aria-atomic="false"></div>
 <div id="viz-tip" role="tooltip" hidden></div>
 
@@ -434,6 +463,145 @@ async function health() {
       <dt>Voice callbacks</dt><dd>${String(r.voice || "").startsWith("ready") ? "Ready" : "Not set up"}</dd>
       <dt>Failed deliveries</dt><dd>${(dl.dead || []).length}</dd>
     </dl>`;
+}
+
+// --- Accounts: who is signed in, and what their role may see -----------------
+let me = {mode: "open", user: null};
+const ROLE_LABEL = {agent: "Agent", lead: "Team lead", admin: "Admin"};
+const ROLE_RANK = {agent: 0, lead: 1, admin: 2};
+// In open mode (no accounts yet) everything is reachable, as it always was.
+const can = role => me.mode === "open" || (me.user && ROLE_RANK[me.user.role] >= ROLE_RANK[role]);
+
+// Any call that comes back 401 means the session ended: go back to sign-in.
+const rawFetch = fetch;
+fetch = async (url, opts) => {
+  const r = await rawFetch(url, opts);
+  if (r.status === 401 && !String(url).startsWith("/api/login")) showLogin();
+  return r;
+};
+
+function showLogin(message) {
+  document.getElementById("login").hidden = false;
+  const err = document.getElementById("login-error");
+  err.hidden = !message; err.textContent = message || "";
+  document.getElementById("login-email").focus();
+}
+
+function applyRole() {
+  const visible = {cases: can("agent"), overview: can("lead"), models: can("lead"), policy: can("lead"),
+                   team: me.mode === "open" || can("admin")};
+  for (const v of VIEWS) document.getElementById(`tab-${v}`).hidden = !visible[v];
+  document.getElementById("sample-btn").hidden = !can("lead");
+  if (!visible[view]) show("cases");
+  document.getElementById("who").innerHTML = me.user
+    ? `<b>${esc(me.user.name)}</b><span class="role">${ROLE_LABEL[me.user.role]}</span>
+       <button class="ghost" onclick="signOut()">Sign out</button>`
+    : "";
+  const banner = document.getElementById("open-banner");
+  if (me.mode === "open" && !banner) {
+    const b = document.createElement("div");
+    b.id = "open-banner"; b.className = "open-banner"; b.setAttribute("role", "status");
+    b.textContent = "Open demo: no accounts yet, so anyone who can reach this console can use it. "
+                  + "Create an admin account (see the Team tab) to require sign-in.";
+    document.querySelector("header")?.after(b);
+  } else if (me.mode !== "open" && banner) banner.remove();
+}
+
+async function boot() {
+  try { me = await (await rawFetch("/api/me")).json(); } catch { me = {mode: "open", user: null}; }
+  if (me.mode === "accounts" && !me.user) { showLogin(); return; }
+  applyRole();
+  refreshView();
+}
+
+async function signIn(e) {
+  e.preventDefault();
+  const btn = document.getElementById("login-btn");
+  btn.disabled = true; btn.textContent = "Signing in…";
+  try {
+    const r = await rawFetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email: document.getElementById("login-email").value,
+                            password: document.getElementById("login-password").value})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || "Couldn't sign in. Try again.");
+    me = d;
+    document.getElementById("login").hidden = true;
+    document.getElementById("login-password").value = "";
+    applyRole(); refreshView();
+    toast(`Signed in as ${me.user.name}.`);
+  } catch (err) { showLogin(err.message.charAt(0).toUpperCase() + err.message.slice(1) + "."); }
+  btn.disabled = false; btn.textContent = "Sign in";
+}
+
+async function signOut() {
+  await rawFetch("/api/logout", {method: "POST"});
+  me = {mode: "accounts", user: null};
+  document.getElementById("who").innerHTML = "";
+  showLogin();
+}
+
+// --- Team: admins manage accounts -------------------------------------------
+async function loadTeam() {
+  const el = document.getElementById("view-team");
+  if (me.mode === "open") {
+    el.innerHTML = `<h2>Team</h2><div class="card"><h3>Require sign-in</h3>
+      <p style="margin:0 0 10px">There are no accounts yet, so this console is open to anyone who can reach it.
+        Create the first admin on the server:</p>
+      <p style="margin:0"><code>python -m sanwaad.auth add-user --email you@company.com --name "Your Name" --role admin</code></p>
+      <p class="note">It asks for a password (10 characters or more). From then on everyone signs in, and the admin
+        adds the rest of the team here.</p></div>`;
+    return;
+  }
+  let d;
+  try { d = await (await fetch("/api/users")).json(); } catch { el.innerHTML = '<p class="muted">Couldn\'t load accounts.</p>'; return; }
+  el.innerHTML = `<h2>Team</h2>
+    <p class="muted" style="margin:0 0 16px">Agents work the case queue. Team leads also see Overview, Model comparison
+      and policy, and load complaints. Admins also change policy and manage accounts.</p>
+    <div class="card"><h3>People</h3>
+      <table class="t team"><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr>
+      ${(d.users || []).map(u => `<tr><td>${esc(u.name)}${me.user && u.id === me.user.id ? " (you)" : ""}</td><td>${esc(u.email)}</td>
+        <td><label class="sr-only" for="role-${u.id}">Role for ${esc(u.name)}</label>
+          <select id="role-${u.id}" onchange="updateUser(${u.id}, {role: this.value})">
+          ${Object.entries(ROLE_LABEL).map(([k, v]) => `<option value="${k}" ${u.role === k ? "selected" : ""}>${v}</option>`).join("")}
+          </select></td>
+        <td>${u.disabled ? '<span class="pill bad">Disabled</span>' : '<span class="pill ok">Active</span>'}</td>
+        <td><button onclick="updateUser(${u.id}, {disabled: ${!u.disabled}})">${u.disabled ? "Enable" : "Disable"}</button></td></tr>`).join("")}
+      </table></div>
+    <form class="card" onsubmit="addUser(event)"><h3>Add a person</h3>
+      <div class="row">
+        <label class="sr-only" for="nu-name">Name</label><input id="nu-name" placeholder="Name" required>
+        <label class="sr-only" for="nu-email">Email</label><input id="nu-email" type="email" placeholder="Work email" required>
+        <label class="sr-only" for="nu-role">Role</label><select id="nu-role">
+          ${Object.entries(ROLE_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <label class="sr-only" for="nu-password">Temporary password</label>
+        <input id="nu-password" type="password" placeholder="Temporary password (10+)" minlength="10" required autocomplete="new-password">
+        <button class="primary" type="submit">Add person</button>
+      </div>
+      <p class="note">Share the temporary password with them directly, not in a public channel.</p>
+    </form>`;
+}
+
+async function addUser(e) {
+  e.preventDefault();
+  const v = id => document.getElementById(id).value;
+  try {
+    const r = await fetch("/api/users", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: v("nu-name"), email: v("nu-email"), role: v("nu-role"), password: v("nu-password")})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    toast(`Added ${d.name} as ${ROLE_LABEL[d.role]}.`); loadTeam();
+  } catch (err) { toast(`Couldn't add that person: ${err.message}.`, "bad"); }
+}
+
+async function updateUser(id, change) {
+  try {
+    const r = await fetch(`/api/users/${id}`, {method: "PATCH", headers: {"Content-Type": "application/json"},
+                                              body: JSON.stringify(change)});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    toast(`${d.name}: ${d.disabled ? "disabled" : ROLE_LABEL[d.role]}.`);
+  } catch (err) { toast(`Couldn't change that account: ${err.message}.`, "bad"); }
+  loadTeam();
 }
 
 // --- Queue ------------------------------------------------------------------
@@ -734,7 +902,7 @@ setInterval(() => { if (!document.hidden && view === "cases") load(); }, 30000);
 
 let view = "cases", comparison = null, cmBackend = null;
 
-const VIEWS = ["cases", "overview", "models", "policy"];
+const VIEWS = ["cases", "overview", "models", "policy", "team"];
 
 function show(v) {
   view = v;
@@ -746,7 +914,7 @@ function show(v) {
 }
 
 function refreshView() {
-  ({cases: load, overview: loadOverview, models: loadModels, policy: loadPolicy})[view]();
+  ({cases: load, overview: loadOverview, models: loadModels, policy: loadPolicy, team: loadTeam})[view]();
 }
 
 const pct = v => v == null ? "—" : `${(v * 100).toFixed(1)}%`;
@@ -1168,7 +1336,7 @@ async function loadOverview() {
 // ---------------------------------------------------------------------------
 
 // Kept in memory only: a reload forgets the token, which is the point.
-const pol = {token: "", actor: "", editing: null, previewed: null, data: null};
+const pol = {editing: null, previewed: null, data: null};
 
 async function loadPolicy() {
   health();
@@ -1188,16 +1356,12 @@ async function loadPolicy() {
 
     <div class="card"><h3>Change a threshold</h3>
       ${p.editing_enabled ? `
-        <div class="row">
-          <input id="pol-token" type="password" placeholder="admin token" value="${esc(pol.token)}"
-            oninput="pol.token=this.value" style="width:200px">
-          <input id="pol-actor" placeholder="your name" value="${esc(pol.actor)}"
-            oninput="pol.actor=this.value" style="width:200px">
-        </div>
-        <p class="note">Each change needs a reason, is checked against hard bounds, and is logged before it takes
-          effect. Preview its impact first; Apply appears once you have.</p>`
-        : `<p style="margin:0">Editing is <b>off</b>. Set <code>SANWAAD_ADMIN_TOKEN</code> on the server to enable it.
-          Values below are still what the server uses.</p>`}
+        <p class="note" style="margin-top:0">Changes are recorded under your name${me.user ? ` (${esc(me.user.name)})` : ""}.
+          Each needs a reason, is checked against hard bounds, and is logged before it takes effect.
+          Preview its impact first; Apply appears once you have.</p>`
+        : `<p style="margin:0">Only an admin can change these${me.mode === "open"
+            ? ". Create the first admin account to enable it (see the Team tab)" : ""}.
+          Values below are what the server uses now.</p>`}
       <table class="t" style="margin-top:10px">
         <tr><th>threshold</th><th>now</th><th>shipped default</th><th>allowed</th><th></th></tr>
         ${p.editable.map(e => `
@@ -1262,7 +1426,6 @@ function editPolicy(policy, field) {
 
 async function postPolicy(url, body, admin) {
   const headers = {"Content-Type": "application/json"};
-  if (admin) headers["X-Admin-Token"] = pol.token;
   const r = await fetch(url, {method: "POST", headers, body: JSON.stringify(body)});
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
@@ -1284,7 +1447,7 @@ async function applyPolicy(policy, field) {
   const reason = document.getElementById("pol-reason").value;
   try {
     const d = await postPolicy("/api/settings/change",
-      {policy, field, value: pol.previewed.value, reason, actor: pol.actor}, true);
+      {policy, field, value: pol.previewed.value, reason}, true);
     status(`${policy}.${field}: ${d.old} → ${d.new}`);
     pol.editing = null; pol.previewed = null; loadPolicy();
   } catch (e) { status(`change refused: ${e.message}`); }
@@ -1303,7 +1466,7 @@ function revertPolicy(id) {
   document.getElementById("toasts").append(box);
   document.getElementById("pol-revert-go").onclick = async () => {
     try {
-      const d = await postPolicy("/api/settings/revert", {change_id: id, actor: pol.actor,
+      const d = await postPolicy("/api/settings/revert", {change_id: id,
         reason: document.getElementById("pol-revert-reason").value}, true);
       box.remove();
       toast(`Reverted: ${d.policy}.${d.field} is back to ${d.new}.`); loadPolicy();
@@ -1327,7 +1490,7 @@ function confusion(b) {
   </table>`;
 }
 
-load();
+boot();
 </script>
 </body>
 </html>

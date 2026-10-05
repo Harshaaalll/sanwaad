@@ -16,7 +16,7 @@ const vm = require("node:vm");
 const HTML = fs.readFileSync(path.join(__dirname, "../../sanwaad/api/static/console.html"), "utf8");
 const SCRIPT = HTML.match(/<script>([\s\S]*)<\/script>/)[1];
 const EXPORTS = ["statusOf", "inFilter", "catLabel", "esc", "ago", "load", "renderList", "whyCard",
-                 "draftChanged", "review", "rejectCase", "niceMax", "momentumHtml", "volumeChart", "learningHtml"];
+                 "draftChanged", "review", "rejectCase", "niceMax", "momentumHtml", "volumeChart", "learningHtml", "boot", "applyRole", "can"];
 
 function fakeElement(id) {
   const classes = new Set();
@@ -56,9 +56,10 @@ function page({responses = {}} = {}) {
   };
   vm.createContext(ctx);
   // The trailing load() call is the page booting; tests call load themselves.
-  vm.runInContext(SCRIPT.replace(/\nload\(\);\s*$/, "\n") +
+  vm.runInContext(SCRIPT.replace(/\nboot\(\);\s*$/, "\n") +
     `\nglobalThis.__api = {${EXPORTS.join(", ")}, get cases() { return cases; },
-      get filter() { return filter; }, set filter(v) { filter = v; }, set selected(v) { selected = v; }};`, ctx);
+      get filter() { return filter; }, set filter(v) { filter = v; }, set selected(v) { selected = v; },
+      set me(v) { me = v; }, get fetch() { return fetch; }};`, ctx);
   const toasts = () => elements.toasts ? elements.toasts.children.map(t => t.textContent) : [];
   return {api: ctx.__api, el: id => document.getElementById(id), selectorResults, fetches, toasts};
 }
@@ -283,4 +284,36 @@ test("the learning card shows the edit rate per category, in plain words", () =>
   assert.match(html, /class="poor">50\.0%/, "a category reviewers keep rewriting is flagged");
   assert.match(html, /− regret/);
   assert.match(api.learningHtml({n: 0}), /No reviews yet/);
+});
+
+// --- accounts ---------------------------------------------------------------------
+
+test("with accounts and no session, the console asks for sign-in and loads nothing", async () => {
+  const {api, el, fetches} = page({responses: {"/api/me": {mode: "accounts", user: null}}});
+  el("login").hidden = true;
+  await api.boot();
+  assert.equal(el("login").hidden, false);
+  assert.deepEqual(fetches.map(f => f.url), ["/api/me"], "no case data is requested before sign-in");
+});
+
+test("an agent sees only the queue; a lead also sees the team-lead views", () => {
+  let {api, el} = page();
+  api.me = {mode: "accounts", user: {id: 1, name: "Asha", role: "agent"}};
+  api.applyRole();
+  assert.equal(el("tab-cases").hidden, false);
+  for (const t of ["tab-overview", "tab-models", "tab-policy", "tab-team", "sample-btn"]) assert.equal(el(t).hidden, true, t);
+  assert.match(el("who").innerHTML, /Asha/);
+
+  ({api, el} = page());
+  api.me = {mode: "accounts", user: {id: 2, name: "Lee", role: "lead"}};
+  api.applyRole();
+  for (const t of ["tab-overview", "tab-models", "tab-policy", "sample-btn"]) assert.equal(el(t).hidden, false, t);
+  assert.equal(el("tab-team").hidden, true, "accounts are an admin's job");
+});
+
+test("a 401 from any call sends the person back to sign-in", async () => {
+  const {api, el} = page({responses: {"/api/cases": {__status: 401, detail: "sign in to continue"}}});
+  el("login").hidden = true;
+  await api.fetch("/api/cases");
+  assert.equal(el("login").hidden, false);
 });

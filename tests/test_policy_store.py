@@ -18,15 +18,6 @@ from sanwaad import config, policy_store
 from sanwaad.graph.nodes import auto_post_allowed
 
 
-@pytest.fixture(autouse=True)
-def _isolated(monkeypatch, tmp_path):
-    monkeypatch.setattr(policy_store, "AUDIT_PATH", tmp_path / "policy_audit.jsonl")
-    yield
-    for name, values in policy_store.DEFAULTS.items():      # never leak a change
-        for field, value in values.items():
-            policy_store._set(name, field, value)
-
-
 def _state(severity: int) -> dict:
     return {"triage": {"severity": severity, "category": "billing", "needs_private_data": False},
             "draft": {"text": "x", "promises_compensation": False},
@@ -120,33 +111,42 @@ def _client():
     return TestClient(server.app)
 
 
-def test_editing_is_off_without_a_configured_token(monkeypatch):
-    monkeypatch.delenv("SANWAAD_ADMIN_TOKEN", raising=False)
+def _signed_in(role: str, email: str = None):
+    """A client signed in as a fresh account with this role."""
+    from sanwaad import auth
+
+    email = email or f"{role}@example.com"
+    auth.add_user(email, f"{role.title()} Person", role, "a-long-password")
+    client = _client()
+    assert client.post("/api/login", json={"email": email, "password": "a-long-password"}).status_code == 200
+    return client
+
+
+def test_with_no_accounts_policy_is_read_only():
     r = _client().post("/api/settings/change", json={
-        "policy": "review", "field": "auto_post_max_severity", "value": 1,
-        "reason": "tighten", "actor": "x"})
-    assert r.status_code == 403 and "disabled" in r.json()["detail"]
+        "policy": "review", "field": "auto_post_max_severity", "value": 1, "reason": "tighten it"})
+    assert r.status_code == 403 and "create an admin account" in r.json()["detail"]
     assert _client().get("/api/settings").json()["editing_enabled"] is False
 
 
-def test_the_wrong_token_is_refused_and_the_right_one_applies(monkeypatch):
-    monkeypatch.setenv("SANWAAD_ADMIN_TOKEN", "s3cret")
+def test_only_an_admin_changes_policy_and_the_change_carries_their_name():
     body = {"policy": "review", "field": "auto_post_max_severity", "value": 1,
-            "reason": "tighten after an incident", "actor": "ops lead"}
-    assert _client().post("/api/settings/change", json=body,
-                          headers={"X-Admin-Token": "guess"}).status_code == 401
+            "reason": "tighten after an incident", "actor": "someone else"}
+    lead = _signed_in("lead")
+    assert lead.post("/api/settings/change", json=body).status_code == 403
+    assert lead.get("/api/settings").json()["editing_enabled"] is False
     assert config.REVIEW.auto_post_max_severity == 2
-    r = _client().post("/api/settings/change", json=body, headers={"X-Admin-Token": "s3cret"})
+
+    admin = _signed_in("admin")
+    r = admin.post("/api/settings/change", json=body)
     assert r.status_code == 200 and r.json()["new"] == 1
-    settings = _client().get("/api/settings").json()
+    assert r.json()["actor"] == "Admin Person", "the actor comes from the session, not the request"
+    settings = admin.get("/api/settings").json()
     row = next(e for e in settings["editable"] if e["field"] == "auto_post_max_severity")
-    assert (row["value"], row["default"]) == (1, 2)
-    assert settings["history"][0]["reason"] == "tighten after an incident"
+    assert (row["value"], row["default"]) == (1, 2) and settings["editing_enabled"] is True
 
 
-def test_an_out_of_bounds_value_through_the_api_is_a_400(monkeypatch):
-    monkeypatch.setenv("SANWAAD_ADMIN_TOKEN", "s3cret")
-    r = _client().post("/api/settings/change", headers={"X-Admin-Token": "s3cret"}, json={
-        "policy": "actions", "field": "reversal_ceiling_inr", "value": 1e9,
-        "reason": "let big refunds through", "actor": "x"})
+def test_an_out_of_bounds_value_through_the_api_is_a_400():
+    r = _signed_in("admin").post("/api/settings/change", json={
+        "policy": "actions", "field": "reversal_ceiling_inr", "value": 1e9, "reason": "let big refunds through"})
     assert r.status_code == 400 and "outside the allowed range" in r.json()["detail"]

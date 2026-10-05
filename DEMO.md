@@ -111,8 +111,8 @@ when something is actually wrong.
 
 Then the other tabs: **Overview** (what is waiting, what is resolved, the
 auto-post rate, cost per case against a person, incidents), **Policy** (every
-threshold, read from the running server; editable within bounds when
-`SANWAAD_ADMIN_TOKEN` is set, with a preview, a reason and a revertible log) and **Model comparison** (triage
+threshold, read from the running server; an admin can change them within
+bounds, with a preview, a reason and a revertible log) and **Model comparison** (triage
 backends scored on labelled data).
 
 **Say:** nothing goes out without a person until the system has earned it — and
@@ -176,7 +176,7 @@ exists in the table and is still not allowed twice.
 
 | Question | Where the answer is |
 |---|---|
-| "Does it actually work, or is that a demo?" | `pytest -q` — 433 tests, no key needed |
+| "Does it actually work, or is that a demo?" | `pytest -q` — 463 tests, no key needed |
 | "What does it cost per case?" | `python -m sanwaad.obs` — p50/p95, budget, spend per step |
 | "What happens when a tool is down?" | scenario 4 above; the breaker stops calling it after 5 failures in a minute |
 | "What if something fails permanently?" | `python -m sanwaad.delivery` — three attempts, then dead-lettered with the customer's words |
