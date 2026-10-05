@@ -68,6 +68,11 @@ HUMAN_COST_INR = {
 # routine one, or it becomes a random escalation generator.
 MAX_CASE_COST_INR = float(os.getenv("SANWAAD_MAX_CASE_COST_INR", "5.0"))
 
+# How every public reply signs off. A team name, never a person's: a personal
+# sign-off a reviewer typed would otherwise be learned from their edits and
+# copied into replies nobody named them in.
+SIGN_OFF = os.getenv("SANWAAD_SIGN_OFF") or f"{os.getenv('SANWAAD_BRAND', 'NimbusPay')} Support"
+
 # How fast a public complaint should get its first reply, for the overview's
 # SLA figures. Four hours is a common social-care target; set your own.
 SLA_FIRST_RESPONSE_MINUTES = float(os.getenv("SANWAAD_SLA_FIRST_RESPONSE_MINUTES", "240"))

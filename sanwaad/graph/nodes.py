@@ -10,7 +10,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..caching import TRIAGE_CACHE
-from ..config import JUDGE, MAX_CASE_COST_INR, REVIEW
+from ..config import JUDGE, MAX_CASE_COST_INR, REVIEW, SIGN_OFF
 from ..context import minimal_text, untrusted, with_trust_rules
 from ..guardrails import check_complaint, check_reply
 from ..llm import NON_CALL_MODELS, format_citations, structured
@@ -622,6 +622,7 @@ it. Follow these rules absolutely:
 - End with exactly one concrete next step.
 - Set `promises_compensation` true if your text commits to any money moving:
   a refund, a credit, a waiver, or a compensation amount."""
+_DRAFT_SYSTEM += f"\n- Sign off as \"— {SIGN_OFF}\". Never sign with a person's name."
 
 
 async def draft_node(state: GrievanceState) -> dict:
@@ -703,7 +704,7 @@ Governing clauses (trusted policy):
                 "Sorry about this — that is a genuinely frustrating position to be in. "
                 "I'm pulling up the details on the transaction you mentioned now. "
                 "Sending you a DM so we can check it properly without your details "
-                "being public. — Adhik, ref " + state["case_id"][-6:]
+                f"being public. — {SIGN_OFF}, ref " + state["case_id"][-6:]
             ),
             "citations": [c.clause_id for c in citations[:3]],
             "promises_compensation": False,
