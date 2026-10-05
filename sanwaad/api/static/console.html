@@ -5,342 +5,674 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sanwaad — Review Console</title>
 <style>
+  /* Layout: a work queue on the left, the case being decided on the right;
+     on narrow screens the two stack and a Back button returns to the queue.
+     Tokens first: light by default, dark from the OS or the header toggle. */
   :root {
-    --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e9ef; --dim:#9aa4b6;
-    --accent:#5b9dff; --warn:#f0b429; --ok:#3ecf8e; --bad:#f0616d; --mono: ui-monospace,SFMono-Regular,Menlo,monospace;
+    --bg:#f5f6f8; --panel:#ffffff; --panel-2:#eef1f5; --line:#dde2ea; --fg:#18202c; --dim:#5a6475;
+    --accent:#2e5bcc; --on-accent:#ffffff; --accent-soft:#e6edfb;
+    --ok:#17704b; --control:#7a8497; --ok-soft:#e3f4ec; --warn:#9a6300; --warn-soft:#fcf1dc; --bad:#c0392f; --bad-soft:#fbe8e6;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Devanagari", sans-serif;
+    --radius: 10px;
   }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#0f1218; --panel:#171b23; --panel-2:#1e2430; --line:#2a313e; --fg:#e7eaf0; --dim:#9aa4b6;
+    --accent:#6f9cff; --on-accent:#08132b; --accent-soft:#1c2a4a;
+    --ok:#46cf92; --control:#687388; --ok-soft:#133528; --warn:#f0b43c; --warn-soft:#3a2d12; --bad:#f07068; --bad-soft:#3d1c1a;
+    color-scheme: dark; } }
+  :root[data-theme="dark"] {
+    --bg:#0f1218; --panel:#171b23; --panel-2:#1e2430; --line:#2a313e; --fg:#e7eaf0; --dim:#9aa4b6;
+    --accent:#6f9cff; --on-accent:#08132b; --accent-soft:#1c2a4a;
+    --ok:#46cf92; --control:#687388; --ok-soft:#133528; --warn:#f0b43c; --warn-soft:#3a2d12; --bad:#f07068; --bad-soft:#3d1c1a;
+    color-scheme: dark; }
+
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:14px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex;
-           align-items:center; gap:16px; position:sticky; top:0; background:var(--bg); z-index:5; }
-  h1 { font-size:15px; margin:0; letter-spacing:.02em; }
-  h1 span { color:var(--dim); font-weight:400; }
-  button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
-           border-radius:7px; padding:7px 13px; cursor:pointer; font-size:13px; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--sans); }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  button { background:var(--panel); color:var(--fg); border:1px solid var(--control); border-radius:8px;
+           padding:7px 13px; cursor:pointer; font:inherit; font-size:13px; }
   button:hover { border-color:var(--accent); }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#04101f; font-weight:600; }
+  button:disabled { opacity:.5; cursor:not-allowed; border-color:var(--line); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
   button.danger { border-color:var(--bad); color:var(--bad); }
-  .wrap { display:grid; grid-template-columns:340px 1fr; gap:0; height:calc(100vh - 53px); }
-  .list { border-right:1px solid var(--line); overflow-y:auto; }
-  .case { padding:12px 16px; border-bottom:1px solid var(--line); cursor:pointer; }
-  .case:hover { background:var(--panel); }
-  .case.sel { background:var(--panel); box-shadow:inset 3px 0 0 var(--accent); }
-  .case .who { font-family:var(--mono); font-size:12px; color:var(--dim); }
-  .case .txt { margin:5px 0; max-height:3.2em; overflow:hidden; }
-  .detail { overflow-y:auto; padding:22px 26px; }
-  .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:99px;
-          border:1px solid var(--line); color:var(--dim); margin-right:5px; font-family:var(--mono); }
-  .pill.s4,.pill.s5 { color:var(--bad); border-color:var(--bad); }
-  .pill.s3 { color:var(--warn); border-color:var(--warn); }
-  .pill.ok { color:var(--ok); border-color:var(--ok); }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
-          padding:16px; margin-bottom:16px; }
-  .card h3 { margin:0 0 10px; font-size:12px; text-transform:uppercase;
-             letter-spacing:.08em; color:var(--dim); font-weight:600; }
-  textarea { width:100%; min-height:110px; background:var(--bg); color:var(--fg);
-             border:1px solid var(--line); border-radius:8px; padding:11px; font:inherit; resize:vertical; }
-  .clause { font-family:var(--mono); font-size:12px; padding:6px 0; border-bottom:1px solid var(--line); }
-  .clause b { color:var(--accent); }
-  .row { display:flex; gap:9px; flex-wrap:wrap; align-items:center; }
-  .timeline { font-family:var(--mono); font-size:12px; }
-  .timeline div { padding:4px 0; border-bottom:1px solid var(--line); color:var(--dim); }
-  .timeline b { color:var(--fg); display:inline-block; min-width:110px; }
-  .quote { border-left:2px solid var(--line); padding-left:12px; color:var(--dim); white-space:pre-wrap; }
-  .cost { font-family:var(--mono); font-size:20px; color:var(--ok); }
-  .muted { color:var(--dim); }
+  button.danger.armed { background:var(--bad); color:var(--panel); }
+  button.ghost { background:none; border-color:transparent; color:var(--dim); }
+  button.ghost:hover { color:var(--fg); border-color:var(--line); }
   a { color:var(--accent); }
-  .action { padding:10px 0; border-top:1px solid rgba(127,127,127,.22); }
-  .action:first-of-type { border-top:0; }
-  .checks { font-size:12px; line-height:1.55; opacity:.9; }
-  .approve { display:block; margin-top:8px; font-size:13px; }
-  /* The health strip. Everything the system degrades around — a tool that is
-     failing, a queue that is full, an item that gave up — is invisible in a
-     case list, because a case list only shows what worked. */
-  #health { margin-left:auto; display:flex; gap:6px; align-items:center; }
-  /* A long status message must not squeeze the tabs and the health strip. */
-  #status { min-width:0; max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-            display:flex; gap:6px; align-items:center; }
-  .tabs button, header > button { white-space:nowrap; flex:none; }
-  #health .pill { margin:0; cursor:default; white-space:nowrap; }
-  h1 { white-space:nowrap; }
-  #health .pill.bad { color:var(--bad); border-color:var(--bad); }
-  #health .pill.warn { color:var(--warn); border-color:var(--warn); }
-  /* Views */
-  .tabs { display:flex; gap:4px; }
-  .tabs button { border-color:transparent; background:none; color:var(--dim); }
-  .tabs button.on { color:var(--fg); border-color:var(--line); background:var(--panel); }
-  .models { height:calc(100vh - 53px); overflow-y:auto; padding:22px 26px; }
+  code { font-family:var(--mono); font-size:12px; background:var(--panel-2); padding:1px 5px; border-radius:4px; }
+  .muted { color:var(--dim); }
+  .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+  /* Header */
+  header { display:flex; align-items:center; gap:14px; padding:10px 18px; border-bottom:1px solid var(--line);
+           background:var(--panel); position:sticky; top:0; z-index:10; }
+  h1 { font-size:15px; margin:0; white-space:nowrap; letter-spacing:.01em; }
+  h1 span { color:var(--dim); font-weight:500; }
+  .tabs { display:flex; gap:2px; overflow-x:auto; min-width:0; scrollbar-width:none; }
+  .tabs button { border-color:transparent; background:none; color:var(--dim); white-space:nowrap; }
+  .tabs button.on { color:var(--fg); background:var(--panel-2); font-weight:600; }
+  .spacer { flex:1; }
+  .sys { position:relative; flex:none; }
+  .sys-btn { display:flex; align-items:center; gap:7px; border-radius:99px; padding:5px 12px; white-space:nowrap; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); flex:none; }
+  .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
+  .sys-pop { position:absolute; right:0; top:calc(100% + 6px); width:300px; background:var(--panel);
+             border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px;
+             box-shadow:0 8px 24px rgba(0,0,0,.18); z-index:20; font-size:13px; }
+  .sys-pop dl { display:grid; grid-template-columns:auto 1fr; gap:6px 12px; margin:0; }
+  .sys-pop dt { color:var(--dim); } .sys-pop dd { margin:0; text-align:right; }
+
+  /* Pills: state encoded in colour and words, never colour alone */
+  .pill { display:inline-flex; align-items:center; gap:4px; font-size:12px; padding:2px 9px; border-radius:99px;
+          border:1px solid var(--line); color:var(--dim); background:var(--panel); white-space:nowrap; }
+  .pill.ok { color:var(--ok); border-color:transparent; background:var(--ok-soft); }
+  .pill.warn, .pill.s3 { color:var(--warn); border-color:transparent; background:var(--warn-soft); }
+  .pill.bad, .pill.s4, .pill.s5, .pill.wrong { color:var(--bad); border-color:transparent; background:var(--bad-soft); }
+  .pill.info { color:var(--accent); border-color:transparent; background:var(--accent-soft); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+
+  /* Cases view */
+  .wrap { display:grid; grid-template-columns:minmax(300px, 380px) 1fr; height:calc(100vh - 57px); }
+  .queue { border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; background:var(--panel); }
+  .qtools { padding:12px 12px 8px; display:grid; gap:8px; border-bottom:1px solid var(--line); }
+  .qtools .row { gap:6px; }
+  .chip { border-radius:99px; padding:4px 11px; font-size:12px; }
+  .chip.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); font-weight:600; }
+  .chip b { font-weight:600; margin-left:3px; }
+  #search { width:100%; }
+  .list { overflow-y:auto; flex:1; min-height:0; }
+  .case { display:block; width:100%; text-align:left; border:0; border-bottom:1px solid var(--line); border-radius:0;
+          padding:11px 14px 11px 16px; background:none; position:relative; }
+  .case::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:transparent; }
+  .case.p-crisis::before, .case.p-5::before, .case.p-4::before { background:var(--bad); }
+  .case.p-3::before { background:var(--warn); }
+  .case:hover { background:var(--panel-2); border-color:var(--line); }
+  .case.sel { background:var(--accent-soft); }
+  .case .who { display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--dim); }
+  .case .txt { margin:3px 0 7px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .case .row { gap:5px; }
+  .empty { padding:28px 20px; color:var(--dim); }
+  .empty h2 { font-size:16px; color:var(--fg); margin:0 0 6px; }
+  .detail { overflow-y:auto; padding:22px clamp(16px, 3vw, 32px) 40px; min-width:0; }
+  .detail-inner { max-width:880px; margin:0 auto; display:grid; gap:14px; }
+  .back { display:none; }
+
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; min-width:0; }
+  .card h3, .sub { margin:0 0 10px; font-size:12px; text-transform:uppercase; letter-spacing:.07em;
+                   color:var(--dim); font-weight:600; }
+  .sub { margin:16px 0 6px; font-size:11px; }
+  .case-head .meta { color:var(--dim); font-size:13px; margin-top:8px; }
+  .complaint { margin:12px 0 0; font-size:17px; line-height:1.55; padding:12px 16px; border-left:3px solid var(--accent);
+               background:var(--panel-2); border-radius:0 8px 8px 0; white-space:pre-wrap; }
+  .summary { margin:10px 0 0; color:var(--dim); font-size:13px; }
+  .callout { padding:10px 12px; border-radius:8px; font-size:13px; margin:0 0 12px; }
+  .callout.warn { background:var(--warn-soft); color:var(--fg); border-left:3px solid var(--warn); }
+  .callout.bad { background:var(--bad-soft); border-left:3px solid var(--bad); }
+  .callout.ok { background:var(--ok-soft); border-left:3px solid var(--ok); }
+  label.field { display:block; font-size:12px; color:var(--dim); margin-bottom:5px; font-weight:600; }
+  textarea { width:100%; min-height:120px; background:var(--bg); color:var(--fg); border:1px solid var(--control);
+             border-radius:8px; padding:11px 12px; font:inherit; font-size:14px; resize:vertical; }
+  .decision.card { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+  .decide { margin-top:14px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .reply { white-space:pre-wrap; margin:0; }
+  .action { padding:12px 0; border-top:1px solid var(--line); }
+  .action:first-child { border-top:0; padding-top:4px; }
+  .action .what { font-weight:600; }
+  .checks { font-size:12px; color:var(--dim); margin-top:4px; }
+  .checks summary { cursor:pointer; }
+  .checks div { padding:1px 0; }
+  .approve { display:flex; gap:8px; align-items:center; margin-top:8px; font-size:13px; font-weight:600;
+             padding:8px 10px; border:1px dashed var(--line); border-radius:8px; }
+  details.fold { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); }
+  details.fold > summary { cursor:pointer; padding:13px 18px; font-weight:600; list-style:none; display:flex;
+                           justify-content:space-between; gap:10px; }
+  details.fold > summary::-webkit-details-marker { display:none; }
+  details.fold > summary::after { content:"Show"; color:var(--dim); font-weight:400; font-size:12px; }
+  details.fold[open] > summary::after { content:"Hide"; }
+  details.fold > summary small { color:var(--dim); font-weight:400; }
+  details.fold > .body { padding:0 18px 16px; }
+  .clause { font-size:13px; padding:6px 0; border-bottom:1px solid var(--line); }
+  .clause:last-child { border-bottom:0; }
+  .clause b { color:var(--accent); font-family:var(--mono); font-weight:600; margin-right:6px; }
+  .timeline { display:grid; gap:0; }
+  .timeline div { display:grid; grid-template-columns:200px 1fr; gap:12px; padding:6px 0; border-bottom:1px solid var(--line);
+                  font-size:13px; }
+  .timeline div:last-child { border-bottom:0; }
+  .timeline b { font-weight:600; }
+  .timeline span { color:var(--dim); overflow-wrap:anywhere; }
+  .cost { font-family:var(--mono); font-size:20px; color:var(--ok); }
+
+  /* Toasts */
+  #toasts { position:fixed; right:16px; bottom:calc(16px + env(safe-area-inset-bottom, 0px)); display:grid; gap:8px;
+            z-index:30; max-width:min(420px, calc(100vw - 32px)); }
+  .toast { background:var(--fg); color:var(--bg); padding:10px 14px; border-radius:8px; font-size:13px;
+           box-shadow:0 8px 24px rgba(0,0,0,.25); }
+  .toast.bad { background:var(--bad); color:#fff; }
+  .toast.inline { display:flex; gap:8px; align-items:center; background:var(--panel); color:var(--fg); border:1px solid var(--line); }
+  @media (prefers-reduced-motion: no-preference) { .toast { animation:rise .18s ease-out; } }
+  @keyframes rise { from { transform:translateY(6px); opacity:0; } to { transform:none; opacity:1; } }
+
+  /* Other views */
+  /* Centre a 1240px column with padding, so every child lines up whatever its own margins. */
+  .models { height:calc(100vh - 57px); overflow-y:auto; padding-block:22px 40px;
+            padding-inline:max(clamp(16px, 3vw, 32px), calc((100% - 1240px) / 2)); }
   .models[hidden], .wrap[hidden] { display:none; }
-  .models h2 { font-size:15px; margin:0 0 4px; }
+  .models h2 { font-size:18px; margin:0 0 4px; }
+  .models .card { margin-bottom:16px; overflow-x:auto; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:14px; margin-bottom:16px; }
+  .grid > .card { margin-bottom:0; }
   .score .big { font-family:var(--mono); font-size:26px; margin:2px 0 8px; }
   .score dl { display:grid; grid-template-columns:auto 1fr; gap:3px 12px; margin:0; font-size:12px; }
   .score dt { color:var(--dim); }
   .score dd { margin:0; font-family:var(--mono); text-align:right; }
-  table.t { width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono); }
-  table.t th { text-align:right; color:var(--dim); font-weight:500; padding:5px 8px; border-bottom:1px solid var(--line); }
-  table.t td { text-align:right; padding:5px 8px; border-bottom:1px solid var(--line); }
+  table.t { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
+  table.t th { text-align:right; color:var(--dim); font-weight:600; font-size:12px; padding:6px 8px; border-bottom:1px solid var(--line); }
+  table.t td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); }
   table.t th:first-child, table.t td:first-child { text-align:left; }
   table.t td.good { color:var(--ok); }
   table.t td.poor { color:var(--bad); }
   .cm td { min-width:34px; text-align:center !important; }
   .ex { padding:10px 0; border-top:1px solid var(--line); }
   .ex:first-of-type { border-top:0; }
+  .ex .who { font-size:12px; color:var(--dim); }
   .ex .txt { margin:4px 0 6px; }
-  .pill.wrong { color:var(--bad); border-color:var(--bad); }
   .note { font-size:12px; color:var(--dim); margin:8px 0 0; }
-  code { font-family:var(--mono); font-size:12px; background:var(--bg); padding:1px 5px; border-radius:4px; }
   .bar { display:flex; height:22px; border-radius:6px; overflow:hidden; border:1px solid var(--line); margin:8px 0 4px; }
   .bar span { display:flex; align-items:center; justify-content:center; font-size:11px; font-family:var(--mono);
               color:#04101f; white-space:nowrap; overflow:hidden; }
-  .legend { display:flex; flex-wrap:wrap; gap:10px; font-size:11px; color:var(--dim); font-family:var(--mono); }
+  .legend { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:var(--dim); }
   .legend i { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
-  .rule { display:flex; gap:8px; font-size:12px; padding:3px 0; }
+  .rule { display:flex; gap:8px; font-size:13px; padding:3px 0; }
   .rule .mark { width:14px; flex:none; text-align:center; }
   .rule.pass .mark { color:var(--ok); } .rule.fail .mark { color:var(--bad); } .rule.off { color:var(--dim); }
-  .scale { position:relative; height:8px; border-radius:4px; margin:14px 0 18px;
+  .scale { position:relative; height:8px; border-radius:4px; margin:14px 0 20px;
            background:linear-gradient(90deg, var(--bad) 0 35%, var(--warn) 35% 55%, var(--ok) 55% 100%); opacity:.85; }
   .scale b { position:absolute; top:-5px; width:3px; height:18px; background:var(--fg); border-radius:2px; }
-  .scale em { position:absolute; top:12px; font-size:10px; color:var(--dim); font-style:normal; transform:translateX(-50%); }
-  .sub { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:14px 0 4px; }
-  .kpi { font-family:var(--mono); font-size:24px; }
+  .scale em { position:absolute; top:12px; font-size:11px; color:var(--dim); font-style:normal; transform:translateX(-50%); white-space:nowrap; }
+  .kpi { font-family:var(--mono); font-size:26px; }
   .kpi small { font-size:12px; color:var(--dim); }
-  .hbar { display:grid; grid-template-columns:130px 1fr 40px; gap:8px; align-items:center; font-size:12px; margin:3px 0; }
+  .hbar { display:grid; grid-template-columns:minmax(90px, 140px) 1fr 40px; gap:8px; align-items:center; font-size:13px; margin:4px 0; }
   .hbar div { height:10px; background:var(--accent); border-radius:3px; min-width:2px; }
   .hbar span:last-child { font-family:var(--mono); text-align:right; color:var(--dim); }
-  input:not([type=checkbox]) { background:var(--bg); color:var(--fg); border:1px solid var(--line);
-          border-radius:6px; padding:6px 9px; font:inherit; font-size:13px; }
-  select { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px 8px; font:inherit; font-size:12px; }
+  input:not([type=checkbox]) { background:var(--bg); color:var(--fg); border:1px solid var(--control);
+          border-radius:8px; padding:7px 10px; font:inherit; font-size:13px; min-width:0; }
+  input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); }
+  select { background:var(--panel); color:var(--fg); border:1px solid var(--control); border-radius:6px; padding:4px 8px; font:inherit; font-size:12px; }
+
+  /* Narrow screens: queue and case stack; the header tabs scroll */
+  @media (max-width: 900px) {
+    header { padding:8px 12px; gap:8px; flex-wrap:wrap; }
+    .tabs { order:3; flex-basis:100%; }
+    .wrap { grid-template-columns:1fr; height:auto; min-height:calc(100vh - 96px); }
+    .queue { border-right:0; }
+    .wrap .detail { display:none; }
+    .wrap.showing .queue { display:none; }
+    .wrap.showing .detail { display:block; }
+    .back { display:inline-block; margin-bottom:4px; justify-self:start; }
+    .models { height:auto; }
+    .timeline div { grid-template-columns:1fr; gap:2px; }
+    .complaint { font-size:16px; }
+    .sys-pop { width:min(300px, calc(100vw - 24px)); }
+    .wide-only { display:none; }
+    #sys-label { max-width:34vw; overflow:hidden; text-overflow:ellipsis; }
+    .sys-btn { padding:5px 10px; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>संवाद <span>Sanwaad</span></h1>
-  <nav class="tabs">
+  <nav class="tabs" aria-label="Sections">
     <button id="tab-cases" class="on" onclick="show('cases')">Cases</button>
     <button id="tab-overview" onclick="show('overview')">Overview</button>
     <button id="tab-models" onclick="show('models')">Model comparison</button>
     <button id="tab-policy" onclick="show('policy')">Policy</button>
   </nav>
-  <button onclick="ingest()">Ingest mock feed</button>
-  <button onclick="refreshView()">Refresh</button>
-  <span id="status" class="muted"></span>
-  <span id="health"></span>
+  <span class="spacer"></span>
+  <div class="sys" id="sys">
+    <button class="sys-btn" id="sys-btn" aria-expanded="false" aria-controls="sys-pop" onclick="toggleSys()">
+      <span class="dot" id="sys-dot"></span><span id="sys-label">Checking…</span></button>
+    <div class="sys-pop" id="sys-pop" hidden></div>
+  </div>
+  <button class="ghost" id="theme-btn" onclick="toggleTheme()" aria-label="Switch light or dark theme"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" style="vertical-align:-2px"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg><span class="wide-only"> Theme</span></button>
 </header>
 
 <div class="wrap" id="view-cases">
-  <div class="list" id="list"></div>
-  <div class="detail" id="detail"><p class="muted">Select a case, or ingest the mock feed to begin.</p></div>
+  <aside class="queue" aria-label="Case queue">
+    <div class="qtools">
+      <input id="search" type="search" placeholder="Search complaints, people, categories" oninput="renderList()"
+             aria-label="Search cases">
+      <div class="row" id="filters" role="group" aria-label="Filter cases"></div>
+      <div class="row" style="justify-content:space-between">
+        <span class="muted" id="qcount" style="font-size:12px"></span>
+        <span class="row">
+          <button class="ghost" onclick="load()" title="Reload the queue">Refresh</button>
+          <button onclick="ingest()" id="sample-btn">Load sample complaints</button>
+        </span>
+      </div>
+    </div>
+    <div class="list" id="list"></div>
+  </aside>
+  <section class="detail" id="detail" aria-live="polite">
+    <div class="empty"><h2>Pick a complaint from the queue</h2>
+      Cases waiting for your review are shown first, most urgent at the top. Use ↑ ↓ or J K to move through them.</div>
+  </section>
 </div>
 <div class="models" id="view-overview" hidden></div>
 <div class="models" id="view-models" hidden></div>
 <div class="models" id="view-policy" hidden></div>
+<div id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <script>
-let cases = [], selected = null;
+let cases = [], selected = null, filter = null;
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const status = m => document.getElementById("status").textContent = m;
 
-async function ingest() {
-  status("ingesting…");
-  const r = await fetch("/api/ingest", {method:"POST", headers:{"Content-Type":"application/json"},
-                                        body: JSON.stringify({channel:"mock", limit:8})});
-  const d = await r.json();
-  status(`ingested ${d.ingested}`);
-  refreshView();
+// --- Plain-language labels: one term per thing, used everywhere ----------------
+const CATEGORY = {billing:"Billing & fees", refund:"Refund", service_outage:"Service outage", delivery:"Delivery",
+  account_access:"Account access", agent_behaviour:"Staff behaviour", data_privacy:"Fraud & privacy",
+  praise:"Praise", off_topic:"Not about us"};
+const SEVERITY = {1:"Low", 2:"Minor", 3:"Moderate", 4:"High", 5:"Critical"};
+const AUTHOR = {customer:"Customer", audience:"Large audience", troll:"Likely troll", bot:"Likely bot",
+  competitor:"Competitor", unknown:"Unverified"};
+const CHANNEL = {mock:"Sample feed", reddit:"Reddit", twitter:"X / Twitter", playstore:"Play Store"};
+const STAGE = {triage:"Read and classified", pattern:"Checked for similar reports", judge:"Assessed the author",
+  prioritise:"Placed in the queue", retrieve:"Found the relevant policy", draft:"Drafted a reply",
+  ground_check:"Checked claims against policy", plan:"Planned the fix", review_gate:"Review",
+  publish:"Posted the reply", act:"Carried out actions", escalation:"Decided on a callback",
+  voice:"Callback", close:"Closed the case"};
+const ACTION = {reversal:"Refund reversal", ticket:"Internal ticket"};
+const RISK = {read:"Read-only", write_low:"Low risk", write_high:"Moves money: needs your approval"};
+const STATUS = {
+  needs_review: {label:"Needs your review", cls:"warn"},
+  awaiting_call: {label:"Callback owed", cls:"info"},
+  in_progress: {label:"In progress", cls:""},
+  resolved: {label:"Resolved", cls:"ok"},
+  closed_unresolved: {label:"Closed, unresolved", cls:"bad"},
+  logged: {label:"Logged, no reply", cls:""},
+};
+const TIER = {crisis:"Incident", priority:"Priority", routine:"Routine", ignore:"Logged, no reply"};
+const LEVEL = {SHADOW:"Watching only", ASSISTED:"Drafts for a person", SUPERVISED:"Acts, person can undo", AUTONOMOUS:"Acts on its own"};
+const catLabel = c => CATEGORY[c] || (c ? String(c).replaceAll("_", " ") : "Not yet classified");
+const sevPill = s => s ? `<span class="pill s${s}" title="Severity ${s} of 5">${SEVERITY[s] || s}</span>` : "";
+
+function statusOf(c) {
+  if (c.closure) {
+    if ((c.priority || {}).tier === "ignore") return "logged";
+    return c.closure.resolved ? "resolved" : "closed_unresolved";
+  }
+  if (c.draft && !c.review) return "needs_review";
+  if (c.review && (c.escalation || {}).needed) return "awaiting_call";
+  return "in_progress";
 }
+const statusPill = k => `<span class="pill ${STATUS[k].cls}">${STATUS[k].label}</span>`;
+
+function ago(iso) {
+  if (!iso) return "";
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+
+// --- Toasts replace the old status text: say what happened, in words --------
+function toast(message, kind = "") {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.setAttribute("role", kind === "bad" ? "alert" : "status");
+  el.textContent = message;
+  document.getElementById("toasts").append(el);
+  setTimeout(() => el.remove(), kind === "bad" ? 7000 : 4000);
+}
+const status = m => toast(m, /refused|failed|couldn/i.test(m) ? "bad" : "");
+
+// --- Theme ------------------------------------------------------------------
+function toggleTheme() {
+  const r = document.documentElement;
+  const dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("sanwaad-theme", r.dataset.theme); } catch {}
+}
+try { const t = localStorage.getItem("sanwaad-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+
+// --- System status: one pill, details on demand -----------------------------
+function toggleSys(force) {
+  const pop = document.getElementById("sys-pop");
+  pop.hidden = force === undefined ? !pop.hidden : !force;
+  document.getElementById("sys-btn").setAttribute("aria-expanded", String(!pop.hidden));
+}
+document.addEventListener("click", e => { if (!document.getElementById("sys").contains(e.target)) toggleSys(false); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && !document.getElementById("sys-pop").hidden) {
+    toggleSys(false); document.getElementById("sys-btn").focus();
+  }
+});
 
 async function health() {
   // /ready answers 503 while the index is warming, so the fetch must not
-  // throw the strip away when the answer is the interesting one.
+  // throw the answer away when it is the interesting one.
   let r;
   try { r = await (await fetch("/ready")).json(); } catch { return; }
   const dl = await (await fetch("/api/delivery")).json().catch(() => ({dead: []}));
-  const pills = [];
-  pills.push(r.ready
-    ? `<span class="pill ok">index ${r.clauses}</span>`
-    : `<span class="pill bad">index ${esc(r.index)}</span>`);
-  pills.push(`<span class="pill">models ${esc(r.models)}</span>`);
-  if (r.triage) {
-    pills.push(`<span class="pill ${r.triage.available ? '' : 'warn'}" title="${esc(r.triage.detail)}"
-      >triage ${esc(r.triage.live)}</span>`);
-  }
-  for (const p of r.concurrency || []) {
-    const full = p.running >= p.limit;
-    pills.push(`<span class="pill ${full ? 'warn' : ''}" title="peak ${p.peak_running}, refused ${p.refused}"
-      >${esc(p.pool)} ${p.running}/${p.limit}</span>`);
-  }
-  for (const c of r.circuits || []) {
-    pills.push(`<span class="pill bad" title="${c.trips} trips">${esc(c.tool)} ${esc(c.state)}</span>`);
-  }
-  if ((dl.dead || []).length) {
-    pills.push(`<span class="pill bad" title="python -m sanwaad.delivery"
-      >${dl.dead.length} dead-lettered</span>`);
-  }
-  document.getElementById("health").innerHTML = pills.join("");
+  const problems = [], warnings = [];
+  if (!r.ready) problems.push(`Policy index ${r.index}: replies can't be grounded yet`);
+  for (const c of r.circuits || []) problems.push(`${c.tool} is failing and paused (${c.state})`);
+  if ((dl.dead || []).length) problems.push(`${dl.dead.length} item(s) failed after retries`);
+  for (const p of r.concurrency || []) if (p.running >= p.limit) warnings.push(`${p.pool} are at capacity`);
+  if (r.triage && !r.triage.available) warnings.push(`Triage model ${r.triage.live} is unavailable; Gemini is covering`);
+  const level = problems.length ? "bad" : warnings.length ? "warn" : "";
+  document.getElementById("sys-dot").className = `dot ${level}`;
+  document.getElementById("sys-label").textContent = problems.length ? `Needs attention (${problems.length})`
+    : warnings.length ? "Running with warnings" : r.models === "offline" ? "Systems normal · demo mode" : "Systems normal";
+  const pools = Object.fromEntries((r.concurrency || []).map(p => [p.pool, p]));
+  document.getElementById("sys-pop").innerHTML = `
+    ${[...problems.map(p => `<div class="callout bad">${esc(p)}</div>`), ...warnings.map(w => `<div class="callout warn">${esc(w)}</div>`)].join("")}
+    <dl>
+      <dt>Policy knowledge</dt><dd>${r.ready ? `${r.clauses} clauses loaded` : esc(r.index)}</dd>
+      <dt>AI models</dt><dd>${r.models === "offline" ? "Offline demo (no API key)" : "Live"}</dd>
+      <dt>Triage model</dt><dd>${esc(r.triage ? r.triage.live : "gemini")}</dd>
+      <dt>Cases processing</dt><dd>${pools.cases ? `${pools.cases.running} of ${pools.cases.limit}` : "—"}</dd>
+      <dt>Live calls</dt><dd>${pools.calls ? `${pools.calls.running} of ${pools.calls.limit}` : "—"}</dd>
+      <dt>Voice callbacks</dt><dd>${String(r.voice || "").startsWith("ready") ? "Ready" : "Not set up"}</dd>
+      <dt>Failed deliveries</dt><dd>${(dl.dead || []).length}</dd>
+    </dl>`;
 }
+
+// --- Queue ------------------------------------------------------------------
+const FILTERS = [["needs_review", "Needs review"], ["awaiting_call", "Callback owed"],
+                 ["in_progress", "In progress"], ["closed", "Closed"], ["all", "All"]];
+const inFilter = (c, f) => f === "all" ? true
+  : f === "closed" ? ["resolved", "closed_unresolved", "logged"].includes(c._status) : c._status === f;
 
 async function load() {
   health();
-  const d = await (await fetch("/api/cases")).json();
-  cases = d.cases;
-  document.getElementById("list").innerHTML = cases.map(c => {
-    const t = c.triage || {};
-    const v = c.verdict || {}, p = c.pattern || {}, pr = c.priority || {};
-    const done = c.closure ? "ok" : "";
-    return `<div class="case ${selected===c.case_id?'sel':''}" onclick="open_('${c.case_id}')">
-      <div class="who">${esc(c.complaint?.author)} · ${esc(c.complaint?.channel)}
-        ${c.complaint && c.complaint.tagged === false ? '<span class="pill">untagged</span>' : ''}</div>
+  let d;
+  try { d = await (await fetch("/api/cases")).json(); }
+  catch { toast("Couldn't load the queue. Check that the server is running, then press Refresh.", "bad"); return; }
+  cases = d.cases.map(c => ({...c, _status: statusOf(c)}));
+  const urgency = c => (c.pattern || {}).level === "crisis" ? 1000 : ((c.priority || {}).score || 0);
+  cases.sort((a, b) => urgency(b) - urgency(a));
+  if (!filter) filter = cases.some(c => c._status === "needs_review") ? "needs_review" : "all";
+  renderList();
+}
+
+function renderList({focusSelected = false} = {}) {
+  // Re-rendering replaces the row buttons, including on the 30-second refresh;
+  // put focus back where a keyboard user had it instead of dropping it on the page.
+  const active = document.activeElement;
+  const hadFocus = focusSelected || !!(active && active.closest && active.closest("#list"));
+  const focusedId = active && active.dataset ? active.dataset.id : null;
+  document.getElementById("filters").innerHTML = FILTERS.map(([k, label]) => {
+    const n = cases.filter(c => inFilter(c, k)).length;
+    return `<button class="chip ${filter === k ? "on" : ""}" aria-pressed="${filter === k}"
+      aria-label="${label}, ${n} case${n === 1 ? "" : "s"}" onclick="filter='${k}'; renderList()">${label} <b>${n}</b></button>`;
+  }).join("");
+  const q = document.getElementById("search").value.trim().toLowerCase();
+  const shown = cases.filter(c => inFilter(c, filter)).filter(c => !q || [
+    c.complaint?.text, c.complaint?.author, catLabel((c.triage || {}).category), STATUS[c._status].label
+  ].join(" ").toLowerCase().includes(q));
+  document.getElementById("qcount").textContent = cases.length
+    ? `${shown.length} of ${cases.length} cases${q ? " match" : ""}` : "";
+  const list = document.getElementById("list");
+  if (!cases.length) {
+    list.innerHTML = `<div class="empty"><h2>No complaints yet</h2>
+      Connect a channel, or load sample complaints to see how cases flow through review.</div>`;
+    return;
+  }
+  if (!shown.length) {
+    list.innerHTML = `<div class="empty">Nothing here${q ? ` matches “${esc(q)}”` : ""}.
+      ${filter !== "all" ? `<button class="ghost" onclick="filter='all'; renderList()">Show all cases</button>` : ""}</div>`;
+    return;
+  }
+  list.innerHTML = shown.map(c => {
+    const t = c.triage || {}, v = c.verdict || {}, p = c.pattern || {};
+    const stripe = p.level === "crisis" ? "p-crisis" : `p-${t.severity || 0}`;
+    return `<button class="case ${stripe} ${selected === c.case_id ? "sel" : ""}" data-id="${esc(c.case_id)}"
+        aria-current="${selected === c.case_id}" onclick="open_('${esc(c.case_id)}')">
+      <div class="who"><span>${esc(c.complaint?.author)} · ${esc(CHANNEL[c.complaint?.channel] || c.complaint?.channel)}</span>
+        <span>${esc(ago(c.opened_at))}</span></div>
       <div class="txt">${esc(c.complaint?.text)}</div>
-      ${p.level === "crisis" ? `<span class="pill s5">crisis · ${p.cluster_size}</span>` :
-        (p.level === "watch" ? `<span class="pill s3">watch · ${p.cluster_size}</span>` : '')}
-      <span class="pill s${t.severity||1}">sev ${t.severity ?? "?"}</span>
-      <span class="pill">${esc(t.category||"…")}</span>
-      ${v.author_class && v.author_class !== "customer" ?
-        `<span class="pill">${esc(v.author_class)}</span>` : ''}
-      ${pr.tier === "ignore" ? '<span class="pill">logged only</span>' : ''}
-      ${c.closure ? '<span class="pill ok">closed</span>' :
-        (c.review ? '<span class="pill">in flight</span>' : '<span class="pill s3">needs review</span>')}
+      <div class="row">
+        ${statusPill(c._status)}
+        ${p.level === "crisis" ? `<span class="pill bad">Incident · ${p.cluster_size} reports</span>` :
+          p.level === "watch" ? `<span class="pill warn">Similar reports · ${p.cluster_size}</span>` : ""}
+        ${sevPill(t.severity)}
+        <span class="pill">${esc(catLabel(t.category))}</span>
+        ${v.author_class && v.author_class !== "customer" ? `<span class="pill">${esc(AUTHOR[v.author_class] || v.author_class)}</span>` : ""}
+        ${c.complaint && c.complaint.tagged === false ? '<span class="pill" title="Found without an @mention">Untagged</span>' : ""}
+      </div>
+    </button>`;
+  }).join("");
+  if (hadFocus) {
+    const id = focusSelected ? selected : (focusedId || selected);
+    document.querySelector(`#list .case[data-id="${CSS.escape(id || "")}"]`)?.focus({preventScroll: true});
+  }
+}
+
+// Keyboard: ↑/↓ or J/K move through the queue, unless the reviewer is typing.
+document.addEventListener("keydown", e => {
+  if (view !== "cases" || e.target.closest("input, textarea, select") || e.metaKey || e.ctrlKey || e.altKey) return;
+  const step = {ArrowDown: 1, j: 1, ArrowUp: -1, k: -1}[e.key];
+  if (!step) return;
+  const rows = [...document.querySelectorAll("#list .case")];
+  if (!rows.length) return;
+  e.preventDefault();
+  const i = rows.findIndex(r => r.dataset.id === selected);
+  const next = rows[Math.max(0, Math.min(rows.length - 1, i < 0 ? 0 : i + step))];
+  open_(next.dataset.id);
+});
+
+function fold(title, body, {open = false, hint = ""} = {}) {
+  return `<details class="fold" ${open ? "open" : ""}><summary><span>${title}
+    ${hint ? `<small> · ${hint}</small>` : ""}</span></summary><div class="body">${body}</div></details>`;
+}
+
+function actionsHtml(s, awaitingReview) {
+  return (s.actions || []).map(a => {
+    const p = a.proposal, v = a.validation;
+    const res = (s.action_results || []).find(r => r.action_id === p.id);
+    const canApprove = awaitingReview && p.risk === "write_high" && v.ok;
+    const passed = v.checks.filter(c => c.passed).length;
+    return `<div class="action">
+      <div class="row">
+        <span class="what">${esc(ACTION[p.kind] || p.kind)}${p.amount_inr ? ` · ₹${Number(p.amount_inr).toLocaleString("en-IN")}` : ""}</span>
+        ${p.reference ? `<code>${esc(p.reference)}</code>` : ""}
+        <span class="pill ${v.ok ? "ok" : "bad"}">${v.ok ? "All checks passed" : "Blocked by checks"}</span>
+        <span class="pill ${p.risk === "write_high" ? "warn" : ""}">${esc(RISK[p.risk] || p.risk)}</span>
+        ${res ? `<span class="pill ${res.status === "executed" ? "ok" : "warn"}">${esc(res.status.replaceAll("_", " "))}</span>` : ""}
+      </div>
+      <div class="checks">${esc(p.reason)}
+        <details><summary>${passed} of ${v.checks.length} checks passed</summary>
+          ${v.checks.map(c => `<div>${c.passed ? "✓" : "✗"} ${esc(c.detail || c.name)}</div>`).join("")}
+        </details></div>
+      ${canApprove ? `<label class="approve"><input type="checkbox" class="act-approve" id="act-${esc(p.id)}"
+         data-id="${esc(p.id)}"> Approve this ${esc((ACTION[p.kind] || p.kind).toLowerCase())}${p.amount_inr
+         ? ` of ₹${Number(p.amount_inr).toLocaleString("en-IN")}` : ""}</label>` : ""}
+      ${res && res.detail ? `<p class="checks" style="margin:6px 0 0">${esc(res.detail)}</p>` : ""}
     </div>`;
-  }).join("") || '<p class="muted" style="padding:16px">No cases yet.</p>';
+  }).join("");
 }
 
 async function open_(id) {
-  selected = id; load();
-  const c = await (await fetch(`/api/cases/${id}`)).json();
-  const s = c.state, t = s.triage||{}, d = s.draft||{}, g = s.grounding||{};
-  const v = s.verdict||{}, pat = s.pattern||{}, pri = s.priority||{};
+  selected = id;
+  renderList({focusSelected: document.activeElement === document.body});
+  document.getElementById("view-cases").classList.add("showing");
+  let c;
+  try { c = await (await fetch(`/api/cases/${id}`)).json(); }
+  catch { toast("Couldn't open that case. Try again, or press Refresh.", "bad"); return; }
+  if (selected !== id) return;                      // the reviewer moved on while it loaded
+  const s = c.state, t = s.triage || {}, d = s.draft || {}, g = s.grounding || {};
+  const v = s.verdict || {}, pat = s.pattern || {};
   const pending = c.pending || null;
   const awaitingVoice = pending && pending.await === "voice_call";
   const awaitingReview = pending && !awaitingVoice;
   const cl = s.closure;
+  const listed = cases.find(x => x.case_id === id);
+  const st = listed ? listed._status : (awaitingReview ? "needs_review" : "in_progress");
+  const acts = actionsHtml(s, awaitingReview);
 
-  document.getElementById("detail").innerHTML = `
-    <div class="row" style="margin-bottom:14px">
-      <span class="pill s${t.severity||1}">severity ${t.severity}</span>
-      <span class="pill">${esc(t.category)}</span>
-      <span class="pill">${esc(t.sentiment)}</span>
-      <span class="pill">reply in ${esc(t.language)}</span>
-      ${g.grounded ? '<span class="pill ok">grounded</span>' : '<span class="pill s4">ungrounded</span>'}
-    </div>
-
-    <div class="card"><h3>Who is speaking, and how many of them</h3>
-      <div class="row" style="margin-bottom:10px">
-        <span class="pill">${esc(v.author_class||"?")}</span>
-        <span class="pill">authenticity ${v.authenticity ?? "?"}</span>
-        <span class="pill">reach ${(v.reach ?? 0).toLocaleString()}</span>
-        ${v.history_with_brand ? `<span class="pill">${v.history_with_brand} prior case(s)</span>` : ''}
-        ${v.reply_worthy === false ? '<span class="pill s4">not answered</span>' : ''}
-        ${pat.level && pat.level !== "none" ?
-          `<span class="pill ${pat.level==='crisis'?'s5':'s3'}">${esc(pat.level)} ·
-            ${pat.cluster_size} people · ${pat.velocity_per_hour}/hr</span>` : ''}
-        ${pri.tier ? `<span class="pill">${esc(pri.tier)}</span>` : ''}
-      </div>
-      ${(v.evidence||[]).length ?
-        `<p class="muted" style="margin:0;font-size:12px">${esc((v.evidence||[]).join(" · "))}</p>` : ''}
-      ${pat.theme ? `<p class="muted" style="margin:6px 0 0;font-size:12px">theme — ${esc(pat.theme)}</p>` : ''}
-    </div>
-
-    ${whyCard(c.explain)}
-
-    <div class="card"><h3>Customer said</h3>
-      <div class="quote">${esc(s.complaint?.text)}</div>
-      <p class="muted" style="margin:10px 0 0;font-size:12px">${esc(t.summary)}</p>
-    </div>
-
-    ${awaitingReview ? `
-    <div class="card"><h3>Draft reply — needs you</h3>
-      <p class="muted" style="margin:-4px 0 10px;font-size:12px">Held because: ${esc(pending.reason)}</p>
-      <textarea id="draft">${esc(d.text)}</textarea>
-      ${(g.unsupported_claims||[]).length ? `<p style="color:var(--bad);font-size:12px">
-         Unsupported: ${g.unsupported_claims.map(esc).join(" · ")}</p>` : ""}
-      <div class="row" style="margin-top:11px">
-        <button class="primary" onclick="review('${id}','approve')">Approve &amp; post</button>
-        <button onclick="review('${id}','edit')">Post my edit</button>
-        <button class="danger" onclick="review('${id}','reject')">Reject</button>
+  const decision = awaitingReview ? `
+    <div class="card decision"><h3>Your decision</h3>
+      <div class="callout warn"><b>Held for you:</b> ${esc(pending.reason)}</div>
+      ${(g.unsupported_claims || []).length ? `<div class="callout bad"><b>Not backed by policy:</b>
+         ${g.unsupported_claims.map(esc).join(" · ")}. Edit these out before posting.</div>` : ""}
+      <label class="field" for="draft">Reply to post publicly${t.language ? ` (in ${esc(t.language)})` : ""}</label>
+      <textarea id="draft" oninput="draftChanged()">${esc(d.text)}</textarea>
+      ${acts ? `<div class="sub">Actions in this case — money moves only if you tick it</div>${acts}` : ""}
+      <div class="decide">
+        <button class="primary" id="btn-approve" onclick="review('${id}','approve')">Approve and post</button>
+        <button id="btn-edit" onclick="review('${id}','edit')" disabled
+          title="Change the reply above to enable this">Post my edited reply</button>
+        <button class="danger" id="btn-reject" onclick="rejectCase('${id}', this)">Reject reply</button>
       </div>
     </div>` : `
-    <div class="card"><h3>Public reply</h3>
-      <div class="quote">${esc((s.review||{}).final_text || d.text)}</div>
-      ${s.review ? `<p class="muted" style="font-size:12px;margin:9px 0 0">
-        ${s.review.auto ? "auto-approved" : "reviewed by " + esc(s.review.reviewer)} — ${esc(s.review.note)}</p>`:""}
-    </div>`}
-
-    ${(s.actions||[]).length ? `
-    <div class="card"><h3>Proposed actions${awaitingReview ? " — approve each one separately" : ""}</h3>
-      ${(s.actions||[]).map(a => {
-        const p = a.proposal, v = a.validation;
-        const res = (s.action_results||[]).find(r => r.action_id === p.id);
-        const canApprove = awaitingReview && p.risk === "write_high" && v.ok;
-        return `<div class="action">
-          <div class="row">
-            <span class="pill ${v.ok ? 'ok' : 's5'}">${v.ok ? 'valid' : 'blocked'}</span>
-            <span class="pill">${esc(p.kind)}</span>
-            <span class="pill">${esc(p.risk.replace('_', ' '))}</span>
-            ${p.reference ? `<b>${esc(p.reference)}</b>` : ''}
-            ${p.amount_inr ? `₹${Number(p.amount_inr).toLocaleString('en-IN')}` : ''}
-            ${res ? `<span class="pill ${res.status === 'executed' ? 'ok' : 's3'}">${esc(res.status)}</span>` : ''}
-          </div>
-          <p class="muted" style="margin:6px 0;font-size:12px">${esc(p.reason)} · proposed by ${esc(p.proposed_by)}</p>
-          <div class="checks">${v.checks.map(c =>
-            `<div>${c.passed ? '✓' : '✗'} <b>${esc(c.name)}</b> ${esc(c.detail)}</div>`).join("")}</div>
-          ${canApprove ? `<label class="approve"><input type="checkbox" class="act-approve"
-             data-id="${esc(p.id)}"> Approve this exact ${esc(p.kind)}</label>` : ''}
-          ${res && res.detail ? `<p class="muted" style="font-size:12px;margin:6px 0 0">${esc(res.detail)}</p>` : ''}
-        </div>`;
-      }).join("")}
-    </div>` : ""}
-
-    ${awaitingVoice ? `
-    <div class="card"><h3>Voice escalation pending</h3>
-      <p style="margin:0 0 10px">${(s.escalation?.reasons||[]).map(esc).join("<br>")}</p>
-      <a href="/call/${id}" target="_blank"><button class="primary">Open browser call</button></a>
-      <button onclick="skipVoice('${id}')">Mark call skipped</button>
-    </div>` : ""}
-
-    <div class="card"><h3>Policy clauses behind this reply</h3>
-      ${(s.citations||[]).slice(0,8).map(c =>
-        `<div class="clause"><b>${esc(c.clause_id)}</b> ${esc(c.heading)}</div>`).join("")}
-    </div>
-
-    ${cl ? `
-    <div class="card"><h3>Closure</h3>
-      <div class="cost">₹${cl.total_cost_inr.toFixed(4)}</div>
-      <p class="muted" style="margin:2px 0 12px;font-size:12px">
-        cost to resolve · ${cl.llm_calls} LLM calls · vs ~₹18–85 for a human</p>
-      <h3>Consistency receipt</h3>
-      <p style="margin:0">${cl.consistency.consistent
-        ? '<span class="pill ok">channels agree</span>'
-        : '<span class="pill s5">CHANNELS DIVERGED</span>'}</p>
-      <div class="clause" style="margin-top:8px">shared: <b>${cl.consistency.shared_clauses.join(", ")||"—"}</b></div>
-      <div class="clause">text only: ${cl.consistency.text_only.join(", ")||"—"}</div>
-      <div class="clause">voice only: ${cl.consistency.voice_only.join(", ")||"—"}</div>
-    </div>` : ""}
-
-    <div class="card"><h3>Timeline</h3>
-      <div class="timeline">${(s.events||[]).map(e =>
-        `<div><b>${esc(e.stage)}</b> ${esc(e.message)}</div>`).join("")}</div>
+    <div class="card"><h3>${s.review ? "Reply" : "Draft reply"}</h3>
+      ${s.review || d.text ? `<p class="reply">${esc((s.review || {}).final_text || d.text)}</p>` : '<p class="muted" style="margin:0">No reply drafted: this case was logged without one.</p>'}
+      ${s.review ? `<p class="note">${s.review.decision === "reject" ? "Rejected" : s.review.auto ? "Posted automatically" : "Approved"}
+        ${s.review.auto ? "" : `by ${esc(s.review.reviewer)}`}${s.review.note ? ` · ${esc(s.review.note)}` : ""}</p>` : ""}
+      ${acts ? `<div class="sub">Actions</div>${acts}` : ""}
     </div>`;
+
+  const voice = awaitingVoice ? `
+    <div class="card"><h3>Callback owed</h3>
+      <p style="margin:0 0 12px">${(s.escalation?.reasons || []).map(esc).join("<br>")}</p>
+      <div class="row">
+        <a href="/call/${esc(id)}" target="_blank" rel="noopener"><button class="primary">Start the callback</button></a>
+        <button onclick="skipVoice('${id}')">Mark callback as skipped</button>
+      </div>
+    </div>` : "";
+
+  const who = `
+    <div class="row" style="margin-bottom:10px">
+      <span class="pill">${esc(AUTHOR[v.author_class] || v.author_class || "Unknown")}</span>
+      <span class="pill">Authenticity ${v.authenticity ?? "?"}</span>
+      <span class="pill">Reach ${(v.reach ?? 0).toLocaleString()}</span>
+      ${v.history_with_brand ? `<span class="pill">${v.history_with_brand} earlier case(s)</span>` : ""}
+      ${v.reply_worthy === false ? '<span class="pill bad">Not answered publicly</span>' : ""}
+      ${pat.level && pat.level !== "none" ? `<span class="pill ${pat.level === "crisis" ? "bad" : "warn"}">
+        ${pat.level === "crisis" ? "Incident" : "Similar reports"} · ${pat.cluster_size} people · ${pat.velocity_per_hour}/hr</span>` : ""}
+    </div>
+    ${(v.evidence || []).length ? `<p class="note" style="margin:0">${esc(v.evidence.join(" · "))}</p>` : ""}
+    ${pat.theme ? `<p class="note">Common theme: ${esc(pat.theme)}</p>` : ""}`;
+
+  const clauses = (s.citations || []).slice(0, 8).map(c =>
+    `<div class="clause"><b>${esc(c.clause_id)}</b>${esc(c.heading)}</div>`).join("");
+
+  const closure = cl ? `
+    <div class="cost">₹${cl.total_cost_inr.toFixed(4)}</div>
+    <p class="note" style="margin:2px 0 12px">Model cost to handle this case · ${cl.llm_calls} AI calls · a person costs about ₹18–85</p>
+    <div class="row">${cl.consistency.consistent ? '<span class="pill ok">Reply and call used the same policy</span>'
+      : '<span class="pill bad">Reply and call used different policy</span>'}</div>
+    <p class="note">Outcome: ${esc(cl.resolution_reason || (cl.resolved ? "resolved" : "unresolved"))}</p>` : "";
+
+  const timeline = `<div class="timeline">${(s.events || []).map(e =>
+    `<div><b>${esc(STAGE[e.stage] || e.stage)}</b><span>${esc(e.message)}</span></div>`).join("")}</div>`;
+
+  document.getElementById("detail").innerHTML = `<div class="detail-inner">
+    <h2 class="sr-only">Case from ${esc(s.complaint?.author)}</h2>
+    <button class="back ghost" onclick="closeCase()">← Back to queue</button>
+    <div class="card case-head">
+      <div class="row">
+        ${statusPill(st)}
+        ${sevPill(t.severity)}
+        <span class="pill">${esc(catLabel(t.category))}</span>
+        ${pat.level === "crisis" ? `<span class="pill bad">Incident · ${pat.cluster_size} reports</span>` : ""}
+        ${t.sentiment ? `<span class="pill">${esc(t.sentiment[0].toUpperCase() + t.sentiment.slice(1))}</span>` : ""}
+        ${g.grounded === false ? '<span class="pill bad">Reply has unbacked claims</span>' : ""}
+      </div>
+      <div class="meta">${esc(s.complaint?.author)} · ${esc(CHANNEL[s.complaint?.channel] || s.complaint?.channel)}
+        ${listed && listed.opened_at ? ` · opened ${esc(ago(listed.opened_at))}` : ""} · <code>${esc(id)}</code></div>
+      <blockquote class="complaint">${esc(s.complaint?.text)}</blockquote>
+      ${t.summary ? `<p class="summary"><b>Summary:</b> ${esc(t.summary)}</p>` : ""}
+    </div>
+    ${decision}
+    ${voice}
+    ${c.explain ? fold("Why this case is here", whyCard(c.explain), {open: awaitingReview, hint: "priority, author, review rules, callback"}) : ""}
+    ${fold("Who is speaking", who, {hint: esc(AUTHOR[v.author_class] || "author")})}
+    ${clauses ? fold("Policy behind the reply", clauses, {hint: `${(s.citations || []).length} clauses`}) : ""}
+    ${closure ? fold("Outcome and cost", closure) : ""}
+    ${fold("Activity", timeline, {hint: `${(s.events || []).length} steps`})}
+  </div>`;
+  document.getElementById("detail").scrollTop = 0;
 }
+
+function closeCase() {
+  document.getElementById("view-cases").classList.remove("showing");
+  const row = document.querySelector(`#list .case[data-id="${CSS.escape(selected || "")}"]`);
+  if (row) row.focus();
+}
+
+function draftChanged() {
+  const listedDraft = document.getElementById("draft").defaultValue;
+  const edited = document.getElementById("draft").value.trim() !== listedDraft.trim();
+  document.getElementById("btn-edit").disabled = !edited;
+  document.getElementById("btn-approve").disabled = edited;
+  document.getElementById("btn-approve").title = edited ? "You changed the reply: use Post my edited reply" : "";
+}
+
+function rejectCase(id, btn) {
+  // Two-step, inside the page: rejecting sends nothing and closes the reply.
+  if (!btn.classList.contains("armed")) {
+    btn.classList.add("armed"); btn.textContent = "Confirm: reject reply";
+    setTimeout(() => { if (btn.isConnected) { btn.classList.remove("armed"); btn.textContent = "Reject reply"; } }, 5000);
+    return;
+  }
+  review(id, "reject");
+}
+
+const DONE = {approve: "Reply approved and posted.", edit: "Your edited reply was posted.",
+              reject: "Reply rejected. Nothing was posted."};
 
 async function review(id, decision) {
   const ta = document.getElementById("draft");
-  status("submitting…");
-  await fetch(`/api/cases/${id}/review`, {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({decision, final_text: ta ? ta.value : null, reviewer:"you",
-      actions: Object.fromEntries([...document.querySelectorAll(".act-approve")]
-        .map(cb => [cb.dataset.id, cb.checked ? "approve" : "reject"]))})});
-  status("done"); open_(id); load();
+  document.querySelectorAll(".decide button").forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(`/api/cases/${id}/review`, {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({decision, final_text: ta ? ta.value : null, reviewer: "you",
+        actions: Object.fromEntries([...document.querySelectorAll(".act-approve")]
+          .map(cb => [cb.dataset.id, cb.checked ? "approve" : "reject"]))})});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+    const approved = [...document.querySelectorAll(".act-approve:checked")].length;
+    toast(DONE[decision] + (approved ? ` ${approved} money action(s) approved.` : ""));
+  } catch (e) {
+    toast(`Couldn't save your decision (${e.message}). Nothing was posted; try again.`, "bad");
+    document.querySelectorAll(".decide button").forEach(b => b.disabled = false);
+    return;
+  }
+  await load(); open_(id);
 }
 
 async function skipVoice(id) {
-  await fetch(`/api/cases/${id}/voice-outcome`, {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({happened:false, channel:"none", resolved:false, summary:"call skipped"})});
-  open_(id); load();
+  try {
+    const r = await fetch(`/api/cases/${id}/voice-outcome`, {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({happened: false, channel: "none", resolved: false, summary: "call skipped"})});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    toast("Callback marked as skipped. The case is closed as unresolved.");
+  } catch (e) { toast(`Couldn't update the callback (${e.message}).`, "bad"); return; }
+  await load(); open_(id);
 }
+
+async function ingest() {
+  const btn = document.getElementById("sample-btn");
+  btn.disabled = true; btn.textContent = "Loading…";
+  try {
+    const d = await (await fetch("/api/ingest", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                 body: JSON.stringify({channel: "mock", limit: 8})})).json();
+    const held = d.cases.filter(c => c.pending).length, failed = d.cases.filter(c => c.error).length;
+    toast(`Loaded ${d.ingested} sample complaints: ${held} need your review${failed ? `, ${failed} failed` : ""}.`,
+          failed ? "bad" : "");
+    filter = null;
+  } catch { toast("Couldn't load sample complaints. Check that the server is running.", "bad"); }
+  btn.disabled = false; btn.textContent = "Load sample complaints";
+  refreshView();
+}
+
+// Keep the queue fresh while the tab is visible, without touching an open case.
+setInterval(() => { if (!document.hidden && view === "cases") load(); }, 30000);
 
 // ---------------------------------------------------------------------------
 // Model comparison — reads what `python -m sanwaad.evals.triage_compare` wrote
@@ -454,7 +786,7 @@ function renderModels() {
     ${bs.length && classes.length ? `<div class="card"><h3>Recall by category — how many of each it caught</h3>
       <table class="t"><tr><th>category</th><th>support</th>${bs.map(b =>
         `<th>${esc(b.backend)} recall</th><th>precision</th>`).join("")}</tr>
-      ${classes.map(c => `<tr><td>${esc(c)}</td><td>${r.dataset.class_counts[c]}</td>${bs.map(b => {
+      ${classes.map(c => `<tr><td>${esc(catLabel(c))}</td><td>${r.dataset.class_counts[c]}</td>${bs.map(b => {
         const pc = b.category.per_class[c] || {};
         const cls = pc.recall == null ? "" : pc.recall >= 0.8 ? "good" : pc.recall < 0.5 ? "poor" : "";
         return `<td class="${cls}">${pct(pc.recall)}</td><td>${pct(pc.precision)}</td>`;
@@ -546,7 +878,7 @@ function whyCard(x) {
         earned autonomy has changed since.</span>` : ""}</p>`;
   }
 
-  return `<div class="card"><h3>Why this case is where it is</h3>
+  return `<div>
     <div class="sub">Queue priority — ${esc(p.tier || "?")}, score ${p.score ?? "?"}</div>
     <div class="bar">${parts.map(([k, v]) =>
       `<span style="width:${v / total * 100}%;background:${PART_COLOURS[k] || "#888"}"
@@ -618,15 +950,15 @@ async function loadOverview() {
     </div>` : ""}
 
     <div class="grid">
-      <div class="card"><h3>By category</h3>${hbars(o.by_category)}</div>
-      <div class="card"><h3>By severity</h3>${hbars(o.by_severity)}</div>
-      <div class="card"><h3>By queue tier</h3>${hbars(o.by_tier)}</div>
-      <div class="card"><h3>By author</h3>${hbars(o.by_author)}</div>
+      <div class="card"><h3>By category</h3>${hbars(Object.fromEntries(Object.entries(o.by_category).map(([k, n]) => [catLabel(k), n])))}</div>
+      <div class="card"><h3>By severity</h3>${hbars(Object.fromEntries(Object.entries(o.by_severity).map(([k, n]) => [`${k} · ${SEVERITY[k] || ""}`, n])))}</div>
+      <div class="card"><h3>By queue tier</h3>${hbars(Object.fromEntries(Object.entries(o.by_tier).map(([k, n]) => [TIER[k] || k, n])))}</div>
+      <div class="card"><h3>By author</h3>${hbars(Object.fromEntries(Object.entries(o.by_author).map(([k, n]) => [AUTHOR[k] || k, n])))}</div>
     </div>
 
     <div class="card"><h3>What the system has earned the right to do alone</h3>
       ${o.autonomy.length ? `<table class="t"><tr><th>capability</th><th>level</th><th>decisions</th><th>agreement</th><th>why</th></tr>
-        ${o.autonomy.map(a => `<tr><td>${esc(a.capability)}</td><td>${esc(a.level)}</td><td>${a.decisions}</td>
+        ${o.autonomy.map(a => `<tr><td>Replies · ${esc(catLabel(a.capability.replace(/^reply\./, "")))}</td><td title="${esc(a.level)}">${esc(LEVEL[a.level] || a.level)}</td><td>${a.decisions}</td>
           <td>${pct(a.agreement)}</td><td style="text-align:left">${esc(a.reason)}</td></tr>`).join("")}</table>`
         : '<p class="muted" style="margin:0">Nothing yet. Every human review adds to this record.</p>'}
       <p class="note">Approving a draft unchanged counts as agreement; editing or rejecting doesn't.
@@ -764,15 +1096,21 @@ async function applyPolicy(policy, field) {
 function revertPolicy(id) {
   // An inline reason field in the header, not a browser prompt(): a revert is
   // a change like any other and needs its reason recorded.
-  const box = document.getElementById("status");
-  box.innerHTML = `<input id="pol-revert-reason" placeholder="why revert (required)" style="width:260px">
-    <button id="pol-revert-go">Confirm revert</button>`;
+  document.getElementById("pol-revert-box")?.remove();
+  const box = document.createElement("div");
+  box.className = "toast inline"; box.id = "pol-revert-box";
+  box.innerHTML = `<label class="field" for="pol-revert-reason" style="margin:0">Why revert?</label>
+    <input id="pol-revert-reason" placeholder="required" style="width:200px">
+    <button class="primary" id="pol-revert-go">Revert change</button>
+    <button class="ghost" onclick="this.parentElement.remove()">Cancel</button>`;
+  document.getElementById("toasts").append(box);
   document.getElementById("pol-revert-go").onclick = async () => {
     try {
       const d = await postPolicy("/api/settings/revert", {change_id: id, actor: pol.actor,
         reason: document.getElementById("pol-revert-reason").value}, true);
-      status(`reverted: ${d.policy}.${d.field} back to ${d.new}`); loadPolicy();
-    } catch (e) { status(`revert refused: ${e.message}`); }
+      box.remove();
+      toast(`Reverted: ${d.policy}.${d.field} is back to ${d.new}.`); loadPolicy();
+    } catch (e) { toast(`Revert refused: ${e.message}`, "bad"); }
   };
   document.getElementById("pol-revert-reason").focus();
 }
