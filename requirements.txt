@@ -11,6 +11,8 @@ langgraph-checkpoint-sqlite==3.1.1
 fastembed==0.8.0
 google-genai==1.75.0
 asyncpraw==8.0.3
+# Explore: public Play Store reviews for any company (MIT, no dependencies)
+google-play-scraper==1.2.7
 
 # tests
 pytest==9.1.1

@@ -283,7 +283,7 @@ python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
 python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
-pytest tests/ -q                           # 466 tests, no API key
+pytest tests/ -q                           # 472 tests, no API key
 node --test tests/js/*.test.js                      # the console's own logic (pytest runs it too)
 ```
 
@@ -347,6 +347,21 @@ Murf keys.
 
 The header's health strip shows the index, model mode, the live triage
 backend, both concurrency pools, open circuits and dead letters.
+
+### Explore any company
+
+The **Explore** tab (team leads and up) searches the Play Store for any company,
+pulls its newest 1–3 star reviews (and Reddit posts when `REDDIT_CLIENT_ID` and
+`REDDIT_CLIENT_SECRET` are set), classifies them, groups recurring complaints
+into themes, and measures how the company itself replies: share answered and
+median time to answer. It is insight only: no reply is drafted for a company
+that hasn't been onboarded with its own policy. Explore keeps its own store,
+so another company's complaints never touch the case queue or the crisis
+detector, and reviewer names are never stored. Without `GOOGLE_API_KEY` the
+categories come from the keyword stand-in and the report says so.
+
+Onboarding a company as its own workspace, with policy imported from its help
+centre and approved by an admin, is the next step.
 
 ### Choosing the triage model
 
@@ -460,7 +475,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            466 tests
+tests/            472 tests
 scripts/          pre-commit (the test gate for git)
 .claude/          Claude Code settings: the test gate hooks, the /handoff skill
 CLAUDE.md         how to work on this repo, for Claude Code
