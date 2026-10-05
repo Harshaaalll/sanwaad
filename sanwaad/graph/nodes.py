@@ -82,15 +82,20 @@ class TriageSummary(BaseModel):
 
 async def llm_triage(text: str, channel: str, *, spent_inr: float = 0.0,
                      trace_id: Optional[str] = None,
-                     use_cache: bool = True) -> tuple[Triage, dict]:
+                     use_cache: bool = True, brand: Optional[str] = None) -> tuple[Triage, dict]:
     """Generative triage: one structured call that writes every field.
 
     `text` must already have been through `check_complaint`. The comparison
     harness passes `use_cache=False`, because a cache hit is free and instant
     and would report a latency and cost no real call has.
+
+    `brand` triages for another company (Explore); its cache namespace is its
+    own, so one company's reading of a sentence is never served for another.
     """
     r = route("triage")
-    cached = TRIAGE_CACHE.get(r.model, text, namespace="triage") if use_cache else None
+    system = _TRIAGE_SYSTEM.replace("NimbusPay, an Indian UPI wallet", brand) if brand else _TRIAGE_SYSTEM
+    namespace = f"triage:{brand.lower()}" if brand else "triage"
+    cached = TRIAGE_CACHE.get(r.model, text, namespace=namespace) if use_cache else None
     if cached is not None:
         return Triage(**cached), {"stage": "triage", "model": "cache", "usd": 0.0, "inr": 0.0,
                                   "prompt_tokens": 0, "output_tokens": 0, "attempts": 0}
@@ -100,7 +105,7 @@ async def llm_triage(text: str, channel: str, *, spent_inr: float = 0.0,
     result, cost = await structured(
         model=r.model,
         fallback_model=r.fallback,
-        system=with_trust_rules(_TRIAGE_SYSTEM),
+        system=with_trust_rules(system),
         user=(f"A public comment on {channel}:\n\n"
               + untrusted("customer_comment", minimal_text(text))),
         schema=Triage,
@@ -120,7 +125,7 @@ async def llm_triage(text: str, channel: str, *, spent_inr: float = 0.0,
     # contaminating healthy traffic long after it ended, and arriving
     # as a clean cache hit with nothing marked degraded about it.
     if use_cache and not (cost.get("degraded") or cost.get("model") in NON_CALL_MODELS):
-        TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"), namespace="triage")
+        TRIAGE_CACHE.put(r.model, text, result.model_dump(mode="json"), namespace=namespace)
     return result, cost
 
 

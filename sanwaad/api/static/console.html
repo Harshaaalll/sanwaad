@@ -251,6 +251,21 @@
   #viz-tip[hidden] { display:none; }
   #viz-tip i { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
 
+  /* Explore */
+  .ex-search { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+  .ex-search input { flex:1; min-width:200px; padding:9px 12px; font-size:14px; }
+  .apps { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:10px; margin-bottom:16px; }
+  .app-card { display:flex; gap:12px; align-items:center; text-align:left; padding:12px; }
+  .app-card img, .rep-head img { width:44px; height:44px; border-radius:10px; flex:none; background:var(--panel-2); }
+  .app-card .meta { font-size:12px; color:var(--dim); }
+  .rep-head { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
+  .rep-head h2 { margin:0; }
+  .progress { height:6px; border-radius:99px; background:var(--accent-soft); overflow:hidden; margin:10px 0 4px; }
+  .progress span { display:block; height:100%; background:var(--accent); transition:width .3s; }
+  .quote-list { display:grid; gap:10px; }
+  .quote-item { border-left:3px solid var(--line); padding:2px 0 2px 12px; }
+  .stars { color:var(--warn); letter-spacing:1px; }
+
   /* Accounts */
   .who-chip { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--dim); white-space:nowrap; }
   .who-chip b { color:var(--fg); font-weight:600; }
@@ -293,6 +308,7 @@
   <nav class="tabs" aria-label="Sections">
     <button id="tab-cases" class="on" onclick="show('cases')">Cases</button>
     <button id="tab-overview" onclick="show('overview')">Overview</button>
+    <button id="tab-explore" onclick="show('explore')">Explore</button>
     <button id="tab-models" onclick="show('models')">Model comparison</button>
     <button id="tab-policy" onclick="show('policy')">Policy</button>
     <button id="tab-team" onclick="show('team')">Team</button>
@@ -329,6 +345,7 @@
   </section>
 </div>
 <div class="models" id="view-overview" hidden></div>
+<div class="models" id="view-explore" hidden></div>
 <div class="models" id="view-models" hidden></div>
 <div class="models" id="view-policy" hidden></div>
 <div class="models" id="view-team" hidden></div>
@@ -465,6 +482,125 @@ async function health() {
     </dl>`;
 }
 
+// --- Explore: any company's public complaints, insight only ----------------------
+let exploreTimer = null;
+const compact = n => new Intl.NumberFormat(undefined, {notation: "compact", maximumFractionDigits: 1}).format(n);
+const starStr = n => n ? "★".repeat(n) + "☆".repeat(5 - n) : "";
+
+async function loadExplore() {
+  const el = document.getElementById("view-explore");
+  let reports = [];
+  try { reports = (await (await fetch("/api/explore")).json()).reports || []; } catch {}
+  el.innerHTML = `<h2>Explore a company</h2>
+    <p class="muted" style="margin:0 0 14px">See what any company's customers are complaining about in public: recent
+      1–3 star Play Store reviews (and Reddit, once connected), classified, grouped into themes, and how the company
+      replies. Insight only: Sanwaad drafts no replies for a company until it's onboarded with its own policy.</p>
+    <form class="ex-search" onsubmit="searchApps(event)">
+      <label class="sr-only" for="ex-q">Company or app name</label>
+      <input id="ex-q" placeholder="Search a company or app, e.g. Swiggy, PhonePe, Zomato" autocomplete="off">
+      <button class="primary" type="submit">Search</button>
+    </form>
+    <div id="ex-results"></div>
+    <div id="ex-report"></div>
+    ${reports.length ? `<div class="card"><h3>Analysed before</h3><div class="row">${reports.map(r =>
+      `<button class="chip" onclick="showReport('${esc(r.app_id)}')">${esc(r.title)} · ${r.analysed}</button>`).join("")}</div></div>` : ""}`;
+}
+
+async function searchApps(e) {
+  e.preventDefault();
+  const q = document.getElementById("ex-q").value.trim(), box = document.getElementById("ex-results");
+  if (q.length < 2) return;
+  box.innerHTML = '<p class="muted">Searching the Play Store…</p>';
+  try {
+    const r = await fetch(`/api/explore/search?q=${encodeURIComponent(q)}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    box.innerHTML = d.results.length ? `<div class="apps">${d.results.map(a => `
+      <button class="card app-card" onclick="startAnalysis('${esc(a.app_id)}')">
+        ${a.icon ? `<img src="${esc(a.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : "<span></span>"}
+        <span><b>${esc(a.title)}</b><br><span class="meta">${esc(a.developer || "")} · ${a.score ?? "–"}★ · ${esc(a.installs || "")}</span><br>
+        <span class="meta" style="color:var(--accent)">Analyse complaints →</span></span>
+      </button>`).join("")}</div>` : `<p class="muted">No apps found for “${esc(q)}”.</p>`;
+  } catch (err) { box.innerHTML = `<p class="callout bad">${esc(err.message)}</p>`; }
+}
+
+async function startAnalysis(appId) {
+  document.getElementById("ex-results").innerHTML = "";
+  const box = document.getElementById("ex-report");
+  try {
+    const r = await fetch(`/api/explore/${encodeURIComponent(appId)}`, {method: "POST"});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+  } catch (err) { box.innerHTML = `<p class="callout bad">Couldn't start: ${esc(err.message)}</p>`; return; }
+  clearInterval(exploreTimer);
+  const poll = async () => {
+    let s;
+    try { s = await (await fetch(`/api/explore/${encodeURIComponent(appId)}/status`)).json(); } catch { return; }
+    if (s.state === "done") { clearInterval(exploreTimer); showReport(appId); return; }
+    if (s.state === "failed") { clearInterval(exploreTimer); box.innerHTML = `<p class="callout bad">Analysis failed: ${esc(s.stage)}</p>`; return; }
+    const pctDone = s.total ? Math.round(s.done / s.total * 100) : 5;
+    box.innerHTML = `<div class="card"><h3>Analysing ${esc(appId)}</h3>
+      <div class="progress" role="progressbar" aria-valuenow="${pctDone}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pctDone}%"></span></div>
+      <p class="note">${esc(s.stage)}${s.total ? ` · ${s.done} of ${s.total}` : ""}</p></div>`;
+  };
+  exploreTimer = setInterval(poll, 1500); poll();
+}
+
+function exploreReportHtml(r) {
+  const a = r.app, c = r.company_replies;
+  const hist = a.histogram || [];
+  const histMax = Math.max(1, ...hist);
+  return `<div class="card">
+    <div class="rep-head">${a.icon ? `<img src="${esc(a.icon)}" alt="" referrerpolicy="no-referrer">` : ""}
+      <div><h2>${esc(a.title)}</h2><span class="muted">${esc(a.developer || "")} · ${a.score ?? "–"}★ from
+        ${Number(a.ratings || 0).toLocaleString()} ratings · ${esc(a.installs || "")} installs ·
+        analysed ${esc(ago(r.generated_at))}</span></div></div>
+    ${r.models === "offline" ? `<div class="callout warn"><b>Categories are approximate.</b> No GOOGLE_API_KEY is set, so a
+      keyword stand-in classified these complaints and labels many as "Not about us". Themes, ratings and reply
+      figures are unaffected. Add the key for real classification.</div>` : ""}
+    <div class="grid kpis">
+      <div class="card tile"><h3>Complaints analysed</h3><div class="kpi">${r.analysed}</div>
+        <p class="note">${Object.entries(r.by_source).map(([k, n]) => `${n} from ${k === "playstore" ? "Play Store" : "Reddit"}`).join(" · ")}
+        · ${r.too_short} too short to classify · Reddit ${esc(r.reddit)}</p></div>
+      <div class="card tile"><h3>Severe (4–5)</h3><div class="kpi">${pct(r.severe_share)}</div>
+        <p class="note">of classified complaints</p></div>
+      <div class="card tile"><h3>Company replies</h3><div class="kpi">${pct(c.rate)}</div>
+        <p class="note">${c.replied} of ${c.of} Play Store complaints answered${c.median_hours != null ? ` · median ${minutes(c.median_hours * 60)}` : ""}</p></div>
+      <div class="card tile"><h3>All ratings</h3>
+        ${[5, 4, 3, 2, 1].map(s => `<div class="hbar"><span>${s}★</span><div style="width:${(hist[s - 1] || 0) / histMax * 100}%"></div>
+          <span>${compact(hist[s - 1] || 0)}</span></div>`).join("")}</div>
+    </div>
+    <div class="viz-grid">
+      <div class="card"><h3>Complaints and company replies per day</h3>
+        <div class="legend" style="margin-bottom:6px"><span><i style="background:var(--s1)"></i>Complaints</span>
+          <span><i style="background:var(--s2)"></i>Company replies</span></div>
+        <div id="ex-chart" class="chart-box"></div></div>
+      <div class="card"><h3>By category</h3>${hbars(Object.fromEntries(Object.entries(r.by_category).map(([k, n]) => [catLabel(k), n])))}</div>
+    </div>
+    <div class="card"><h3>Recurring themes</h3>${r.themes.length ? `<div class="quote-list">${r.themes.map(t =>
+      `<div class="quote-item"><b>${t.size} similar complaints</b> — “${esc(t.example)}”
+        ${t.quotes.length ? `<div class="note">${t.quotes.map(q => `“${esc(q)}”`).join(" · ")}</div>` : ""}</div>`).join("")}</div>`
+      : '<p class="muted" style="margin:0">No complaint repeats often enough to form a theme in this sample.</p>'}</div>
+    <div class="card"><h3>Most severe</h3><div class="quote-list">${r.severe_examples.map(x =>
+      `<div class="quote-item"><div class="row">${x.stars ? `<span class="stars" aria-label="${x.stars} stars">${starStr(x.stars)}</span>` : ""}
+        ${sevPill(x.severity)}<span class="pill">${esc(catLabel(x.category))}</span>
+        <span class="muted" style="font-size:12px">${esc(ago(x.at))}</span></div>“${esc(x.text)}”</div>`).join("")}</div>
+      <p class="note">Public reviews; identifiers removed and reviewer names never stored.</p></div>
+  </div>`;
+}
+
+async function showReport(appId) {
+  const box = document.getElementById("ex-report");
+  let r;
+  try { const res = await fetch(`/api/explore/${encodeURIComponent(appId)}`); if (!res.ok) throw 0; r = await res.json(); }
+  catch { box.innerHTML = '<p class="callout bad">Couldn\'t load that report.</p>'; return; }
+  box.innerHTML = exploreReportHtml(r);
+  const t = {days: r.trend.days, opened: r.trend.complaints, resolved: r.trend.replied};
+  const chart = document.getElementById("ex-chart");
+  chart.innerHTML = volumeChart(t, chart.clientWidth || 640, ["Complaints", "Company replies"]);
+  bindVolumeHover(t, ["Complaints", "Company replies"]);
+  box.scrollIntoView?.({behavior: "smooth", block: "start"});
+}
+
 // --- Accounts: who is signed in, and what their role may see -----------------
 let me = {mode: "open", user: null};
 const ROLE_LABEL = {agent: "Agent", lead: "Team lead", admin: "Admin"};
@@ -488,7 +624,7 @@ function showLogin(message) {
 }
 
 function applyRole() {
-  const visible = {cases: can("agent"), overview: can("lead"), models: can("lead"), policy: can("lead"),
+  const visible = {cases: can("agent"), overview: can("lead"), explore: can("lead"), models: can("lead"), policy: can("lead"),
                    team: me.mode === "open" || can("admin")};
   for (const v of VIEWS) document.getElementById(`tab-${v}`).hidden = !visible[v];
   document.getElementById("sample-btn").hidden = !can("lead");
@@ -902,7 +1038,7 @@ setInterval(() => { if (!document.hidden && view === "cases") load(); }, 30000);
 
 let view = "cases", comparison = null, cmBackend = null;
 
-const VIEWS = ["cases", "overview", "models", "policy", "team"];
+const VIEWS = ["cases", "overview", "explore", "models", "policy", "team"];
 
 function show(v) {
   view = v;
@@ -914,7 +1050,7 @@ function show(v) {
 }
 
 function refreshView() {
-  ({cases: load, overview: loadOverview, models: loadModels, policy: loadPolicy, team: loadTeam})[view]();
+  ({cases: load, overview: loadOverview, explore: loadExplore, models: loadModels, policy: loadPolicy, team: loadTeam})[view]();
 }
 
 const pct = v => v == null ? "—" : `${(v * 100).toFixed(1)}%`;
@@ -1160,9 +1296,11 @@ function sparkline(values, label) {
     <circle cx="${x(n - 1)}" cy="${y(values[n - 1])}" r="4" fill="var(--s1)" stroke="var(--panel)" stroke-width="2"/></svg>`;
 }
 
-function volumeChart(t, width) {
-  const series = [{key: "opened", label: "Opened", color: "var(--s1)"}, {key: "resolved", label: "Resolved", color: "var(--s2)"}];
-  const W = Math.max(300, width), H = 230, L = 34, R = 92, T = 12, B = 28;
+function volumeChart(t, width, labels = ["Opened", "Resolved"]) {
+  const series = [{key: "opened", label: labels[0], color: "var(--s1)"}, {key: "resolved", label: labels[1], color: "var(--s2)"}];
+  // Room on the right for the longer end label ("Company replies 12").
+  const R = Math.max(92, 24 + 7 * Math.max(...labels.map(l => l.length + 4)));
+  const W = Math.max(300, width), H = 230, L = 34, T = 12, B = 28;
   const n = t.days.length, max = niceMax(Math.max(...t.opened, ...t.resolved));
   const x = i => L + i * (W - L - R) / (n - 1), y = v => T + (H - T - B) * (1 - v / max);
   const ticks = [0, max / 4, max / 2, 3 * max / 4, max].filter(v => Number.isInteger(v));
@@ -1186,7 +1324,7 @@ function volumeChart(t, width) {
       data-l="${L}" data-step="${(W - L - R) / (n - 1)}"/></svg>`;
 }
 
-function bindVolumeHover(t) {
+function bindVolumeHover(t, labels = ["Opened", "Resolved"]) {
   const hit = document.getElementById("vol-hit"), cross = document.getElementById("vol-cross");
   if (!hit || !hit.addEventListener) return;
   const tip = document.getElementById("viz-tip");
@@ -1199,8 +1337,8 @@ function bindVolumeHover(t) {
     const i = at(e), cx = Number(hit.dataset.l) + i * Number(hit.dataset.step);
     cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
     tip.innerHTML = `<b>${i === t.days.length - 1 ? "Today" : fmtDay(t.days[i])}</b>
-      <span><i style="background:var(--s1)"></i>Opened ${t.opened[i]}</span>
-      <span><i style="background:var(--s2)"></i>Resolved ${t.resolved[i]}</span>`;
+      <span><i style="background:var(--s1)"></i>${labels[0]} ${t.opened[i]}</span>
+      <span><i style="background:var(--s2)"></i>${labels[1]} ${t.resolved[i]}</span>`;
     tip.hidden = false;
     tip.style.left = `${Math.min(innerWidth - 170, e.clientX + 14)}px`; tip.style.top = `${e.clientY + 14}px`;
   });

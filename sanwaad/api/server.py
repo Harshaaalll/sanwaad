@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -472,6 +473,53 @@ async def api_settings_revert(req: PolicyRevert, user=ADMIN):
         raise HTTPException(400, str(exc)) from None
     logger.warning(f"policy revert {entry['id']} of {req.change_id} by {entry['actor']}")
     return entry
+
+
+# ---------------------------------------------------------------------------
+# Explore any company (insight only; never drafts replies)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/explore/search")
+async def api_explore_search(q: str, _user=LEAD):
+    from sanwaad import explore
+
+    try:
+        return {"results": await explore.find_apps(q)}
+    except Exception as exc:     # a changed Play Store page must read as a message, not a 500
+        raise HTTPException(502, f"couldn't search the Play Store right now ({type(exc).__name__})") from None
+
+
+@app.get("/api/explore")
+async def api_explore_reports(_user=LEAD):
+    from sanwaad import explore
+
+    return {"reports": explore.list_reports()}
+
+
+@app.post("/api/explore/{app_id}")
+async def api_explore_start(app_id: str, _user=LEAD):
+    from sanwaad import explore
+
+    if not re.fullmatch(r"[A-Za-z0-9_.]{3,200}", app_id):
+        raise HTTPException(400, "that doesn't look like a Play Store app id")
+    return explore.job_status(explore.start(app_id)["app_id"])
+
+
+@app.get("/api/explore/{app_id}/status")
+async def api_explore_status(app_id: str, _user=LEAD):
+    from sanwaad import explore
+
+    return explore.job_status(app_id) or {"app_id": app_id, "state": "none"}
+
+
+@app.get("/api/explore/{app_id}")
+async def api_explore_report(app_id: str, _user=LEAD):
+    from sanwaad import explore
+
+    report = explore.load_report(app_id)
+    if report is None:
+        raise HTTPException(404, "no report for that app yet")
+    return report
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ const vm = require("node:vm");
 const HTML = fs.readFileSync(path.join(__dirname, "../../sanwaad/api/static/console.html"), "utf8");
 const SCRIPT = HTML.match(/<script>([\s\S]*)<\/script>/)[1];
 const EXPORTS = ["statusOf", "inFilter", "catLabel", "esc", "ago", "load", "renderList", "whyCard",
-                 "draftChanged", "review", "rejectCase", "niceMax", "momentumHtml", "volumeChart", "learningHtml", "boot", "applyRole", "can"];
+                 "draftChanged", "review", "rejectCase", "niceMax", "momentumHtml", "volumeChart", "learningHtml", "boot", "applyRole", "can", "exploreReportHtml"];
 
 function fakeElement(id) {
   const classes = new Set();
@@ -316,4 +316,26 @@ test("a 401 from any call sends the person back to sign-in", async () => {
   el("login").hidden = true;
   await api.fetch("/api/cases");
   assert.equal(el("login").hidden, false);
+});
+
+// --- explore ------------------------------------------------------------------------
+
+test("an explore report flags approximate categories offline and never shows raw ids", () => {
+  const {api} = page();
+  const report = {
+    app: {title: "FoodCo", developer: "FoodCo Ltd", score: 4.1, ratings: 14275862, installs: "1,000,000+",
+          histogram: [991343, 355771, 685693, 1713700, 10529355]},
+    generated_at: new Date().toISOString(), models: "offline", reddit: "not configured",
+    analysed: 3, too_short: 1, by_source: {playstore: 3}, by_category: {data_privacy: 2, off_topic: 1},
+    severe_share: 0.33, company_replies: {replied: 2, of: 3, rate: 0.667, median_hours: 3},
+    trend: {days: [], complaints: [], replied: []},
+    themes: [{size: 2, example: "<b>refund</b> not received", quotes: []}],
+    severe_examples: [{text: "lost money", stars: 1, source: "playstore", category: "data_privacy", severity: 5, at: null}]};
+  const html = api.exploreReportHtml(report);
+  assert.match(html, /Categories are approximate/);
+  assert.match(html, /Fraud &amp; privacy/);
+  assert.doesNotMatch(html, /data_privacy/);
+  assert.match(html, /10\.5M/, "millions of ratings are shown compactly");
+  assert.match(html, /&lt;b&gt;refund&lt;\/b&gt;/, "review text is escaped, never run as HTML");
+  assert.doesNotMatch(api.exploreReportHtml({...report, models: "live"}), /Categories are approximate/);
 });

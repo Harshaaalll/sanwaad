@@ -26,6 +26,7 @@ tests after each Python edit, the full suite before a turn ends, and again on
 - `sanwaad/auth.py`: accounts, roles (agent < lead < admin) and sessions; `require(role)` guards every API route.
 - `sanwaad/policy_store.py`: the only place a policy may change at runtime (bounded, logged, revertible).
 - `sanwaad/pipeline.py`: run / resume / list cases over one shared SQLite checkpointer.
+- `sanwaad/explore.py`: any company's public complaints (Play Store, Reddit), insight only; its own store, never the case DB.
 - `sanwaad/triage_backends.py`: gemini | laya | jev triage behind one interface.
 - `sanwaad/api/server.py` + `api/static/console.html`: the review console (vanilla JS).
 - `sanwaad/DESIGN.md`: the reasoning behind the architecture, as lessons.
