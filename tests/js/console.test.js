@@ -1,5 +1,5 @@
 // Tests for the review console's own logic, run with Node's built-in runner:
-//   node --test tests/js/
+//   node --test tests/js/*.test.js
 // (tests/test_console_js.py runs this as part of pytest, so CI and the commit
 // gate include it.)
 //

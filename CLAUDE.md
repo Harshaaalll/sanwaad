@@ -8,7 +8,7 @@ hybrid RAG, Gemini (offline stubs without a key). Python 3.12, `.venv/`.
 
 ```bash
 .venv/bin/python -m pytest tests -q          # full suite, offline, no key
-node --test tests/js/                         # console logic only (also run by pytest)
+node --test tests/js/*.test.js                         # console logic only (also run by pytest)
 .venv/bin/ruff check sanwaad tests           # lint (CI pins ruff 0.15.4)
 .venv/bin/python -m sanwaad.api.server       # console on :7870
 .venv/bin/python -m sanwaad.demo             # one case end to end

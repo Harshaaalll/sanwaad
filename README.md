@@ -277,7 +277,7 @@ python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
 python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
 pytest tests/ -q                           # 421 tests, no API key
-node --test tests/js/                      # the console's own logic (pytest runs it too)
+node --test tests/js/*.test.js                      # the console's own logic (pytest runs it too)
 ```
 
 Or in Docker, where that download already happened at build time:
