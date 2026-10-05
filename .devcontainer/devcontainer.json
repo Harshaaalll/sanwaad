@@ -1,0 +1,15 @@
+{
+  // A GitHub Codespace that is ready to run the console: free for personal
+  // accounts within GitHub's monthly quota, and nothing runs on your laptop.
+  // Open the repo on GitHub -> Code -> Codespaces -> Create codespace on main.
+  "name": "Sanwaad",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "hostRequirements": { "memory": "4gb" },
+  // The embedding model (~470 MB) downloads once here and the policy index is
+  // built, so the first start is quick.
+  "postCreateCommand": "pip install --no-cache-dir -r requirements.txt && python -c \"from sanwaad.rag.store import get_store; print(len(get_store().clauses), 'clauses indexed')\"",
+  "forwardPorts": [7870],
+  "portsAttributes": {
+    "7870": { "label": "Sanwaad console", "onAutoForward": "notify" }
+  }
+}

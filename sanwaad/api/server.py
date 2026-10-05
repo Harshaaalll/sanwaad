@@ -7,7 +7,6 @@ other local services during a demo.
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import os
 import sys
@@ -17,8 +16,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
 from pydantic import BaseModel
@@ -27,7 +25,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from sanwaad import policy_store  # noqa: E402
+from sanwaad import auth, policy_store  # noqa: E402
 from sanwaad.autonomy import LEDGER as AUTONOMY  # noqa: E402
 from sanwaad.connectors import get_connector  # noqa: E402
 from sanwaad.delivery import DEAD, DELIVERY  # noqa: E402
@@ -80,6 +78,14 @@ async def _lifespan(_app: FastAPI):
     # before the first case is decided.
     for problem in policy_store.replay():
         logger.error(f"policy override skipped, default kept: {problem}")
+    try:
+        created = auth.bootstrap_admin_from_env()
+        if created:
+            logger.warning(f"created the first admin, {created.email}, from SANWAAD_ADMIN_EMAIL")
+    except auth.AuthError as exc:
+        # A weak or malformed secret must not take the console down; it stays
+        # open-mode and says why.
+        logger.error(f"SANWAAD_ADMIN_EMAIL/PASSWORD not used: {exc}")
     warm = asyncio.create_task(_warm_index())
     try:
         yield
@@ -89,10 +95,32 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Sanwaad", version="0.1.0", lifespan=_lifespan)
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
-)
+# No CORS middleware, on purpose. The console and the call page are served from
+# this same origin. The old allow_origins=["*"] with allow_credentials=True made
+# Starlette echo any Origin back, which was harmless with no logins and, with a
+# session cookie, would let any website act as whoever is signed in.
+
+
+def require(role: str):
+    """Endpoint guard: the signed-in user, if they hold at least `role`.
+
+    With no accounts yet the console runs open (returns None), as it always
+    has, so a first install and the demo work. Once the first account exists
+    there is no open path: no session is 401, too low a role is 403.
+    """
+    def guard(request: Request) -> Optional[auth.User]:
+        if not auth.has_users():
+            return None
+        user = auth.user_for(request.cookies.get(auth.COOKIE))
+        if user is None:
+            raise HTTPException(401, "sign in to continue")
+        if not user.can(role):
+            raise HTTPException(403, f"this needs the {role} role")
+        return user
+    return guard
+
+
+AGENT, LEAD, ADMIN = Depends(require("agent")), Depends(require("lead")), Depends(require("admin"))
 
 # Live WebRTC calls, keyed by case. A case can only be on one call at a time.
 _calls: dict[str, Any] = {}
@@ -177,6 +205,7 @@ async def ready():
     # actually wants when they ask "is this thing running itself yet".
     earned = [r for r in AUTONOMY.report() if r["level"] in ("SUPERVISED", "AUTONOMOUS")]
     state["autonomous_capabilities"] = earned
+    state["auth"] = "accounts" if auth.has_users() else "open"
     # Which model reads every comment first. Reported, never a reason to fail:
     # an unavailable decision model falls back to Gemini per case.
     live = triage_status()
@@ -187,7 +216,7 @@ async def ready():
 
 
 @app.get("/api/delivery")
-async def api_delivery():
+async def api_delivery(_user=AGENT):
     """The dead-letter queue, for the console.
 
     Excerpts were redacted when they were written, so this is safe to render.
@@ -206,7 +235,7 @@ class IngestRequest(BaseModel):
 
 
 @app.post("/api/ingest")
-async def ingest(req: IngestRequest):
+async def ingest(req: IngestRequest, _user=LEAD):
     """Pull inbound items and run each through the graph until it needs a human."""
     connector = get_connector(req.channel)
     complaints = await connector.fetch(limit=req.limit)
@@ -254,12 +283,12 @@ async def ingest(req: IngestRequest):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/cases")
-async def api_cases():
+async def api_cases(_user=AGENT):
     return {"cases": await list_cases()}
 
 
 @app.get("/api/cases/{case_id}")
-async def api_case(case_id: str):
+async def api_case(case_id: str, _user=AGENT):
     case = await get_case(case_id)
     if not case:
         raise HTTPException(404, "no such case")
@@ -282,12 +311,15 @@ class ReviewRequest(BaseModel):
 
 
 @app.post("/api/cases/{case_id}/review")
-async def api_review(case_id: str, req: ReviewRequest):
+async def api_review(case_id: str, req: ReviewRequest, user=AGENT):
     if req.decision not in ("approve", "edit", "reject"):
         raise HTTPException(400, "decision must be approve, edit or reject")
     bad = {k: v for k, v in req.actions.items() if v not in ("approve", "reject")}
     if bad:
         raise HTTPException(400, f"each action decision must be approve or reject: {bad}")
+    if user is not None:
+        # Recorded under the signed-in person, never a name the browser sent.
+        req.reviewer = user.name
     out = await resume_case(case_id, req.model_dump())
     return {"case_id": case_id, "pending": out["pending"],
             "state": _thin(out["state"])}
@@ -304,7 +336,7 @@ class VoiceOutcomeRequest(BaseModel):
 
 
 @app.post("/api/cases/{case_id}/voice-outcome")
-async def api_voice_outcome(case_id: str, req: VoiceOutcomeRequest):
+async def api_voice_outcome(case_id: str, req: VoiceOutcomeRequest, _user=AGENT):
     """Close the voice leg and let the graph finish."""
     out = await resume_case(case_id, req.model_dump())
     return {"case_id": case_id, "state": _thin(out["state"])}
@@ -325,7 +357,7 @@ def _thin(state: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/policy/search")
-async def api_policy_search(q: str, k: int = 5):
+async def api_policy_search(q: str, k: int = 5, _user=AGENT):
     return {"results": [c.model_dump() for c in get_store().search(q, k=k)]}
 
 
@@ -334,7 +366,7 @@ async def api_policy_search(q: str, k: int = 5):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/overview")
-async def api_overview():
+async def api_overview(_user=LEAD):
     from sanwaad import feedback
     from sanwaad.overview import summarise
 
@@ -345,7 +377,7 @@ async def api_overview():
 
 
 @app.get("/api/settings")
-async def api_settings():
+async def api_settings(user=LEAD):
     """Every threshold that decides a case's state, read from the live objects.
 
     Read-only by design: these decide what goes out without a person, so they
@@ -380,22 +412,19 @@ async def api_settings():
                    "triage_backend": triage_status()["live"]},
         "where": "sanwaad/config.py (policies), environment variables in .env.example",
         "editable": policy_store.describe(),
-        "editing_enabled": bool(os.getenv("SANWAAD_ADMIN_TOKEN")),
+        # Editing needs an admin account; with no accounts the policy is read-only.
+        "editing_enabled": bool(user and user.can("admin")),
         "history": list(reversed(policy_store.history()))[:50],
     }
 
 
-def _require_admin(token: Optional[str]) -> None:
-    """Policy edits need the admin token. With none configured, editing is off.
-
-    The console has no login, so this is the only thing between anyone who can
-    open it and a looser auto-post rule.
-    """
-    expected = os.getenv("SANWAAD_ADMIN_TOKEN")
-    if not expected:
-        raise HTTPException(403, "policy editing is disabled: set SANWAAD_ADMIN_TOKEN to enable it")
-    if not token or not hmac.compare_digest(token.encode(), expected.encode()):
-        raise HTTPException(401, "wrong or missing admin token")
+def _policy_editor(user: Optional[auth.User]) -> auth.User:
+    """Changing what posts without a person needs a named admin. In open mode,
+    with no accounts, there is nobody to hold responsible, so it is refused."""
+    if user is None:
+        raise HTTPException(403, "create an admin account to change policy: "
+                                 "python -m sanwaad.auth add-user --role admin ...")
+    return user
 
 
 class PolicyChange(BaseModel):
@@ -413,7 +442,7 @@ class PolicyRevert(BaseModel):
 
 
 @app.post("/api/settings/preview")
-async def api_settings_preview(req: PolicyChange):
+async def api_settings_preview(req: PolicyChange, _user=LEAD):
     """Read-only: which stored cases the candidate value would decide differently."""
     try:
         return policy_store.preview(req.policy, req.field, req.value, await case_states())
@@ -422,11 +451,11 @@ async def api_settings_preview(req: PolicyChange):
 
 
 @app.post("/api/settings/change")
-async def api_settings_change(req: PolicyChange, x_admin_token: Optional[str] = Header(None)):
-    _require_admin(x_admin_token)
+async def api_settings_change(req: PolicyChange, user=ADMIN):
+    editor = _policy_editor(user)
     try:
         entry = policy_store.apply(req.policy, req.field, req.value,
-                                   reason=req.reason, actor=req.actor)
+                                   reason=req.reason, actor=editor.name)
     except policy_store.PolicyError as exc:
         raise HTTPException(400, str(exc)) from None
     logger.warning(f"policy change {entry['id']}: {entry['policy']}.{entry['field']} "
@@ -435,10 +464,10 @@ async def api_settings_change(req: PolicyChange, x_admin_token: Optional[str] = 
 
 
 @app.post("/api/settings/revert")
-async def api_settings_revert(req: PolicyRevert, x_admin_token: Optional[str] = Header(None)):
-    _require_admin(x_admin_token)
+async def api_settings_revert(req: PolicyRevert, user=ADMIN):
+    editor = _policy_editor(user)
     try:
-        entry = policy_store.revert(req.change_id, reason=req.reason, actor=req.actor)
+        entry = policy_store.revert(req.change_id, reason=req.reason, actor=editor.name)
     except policy_store.PolicyError as exc:
         raise HTTPException(400, str(exc)) from None
     logger.warning(f"policy revert {entry['id']} of {req.change_id} by {entry['actor']}")
@@ -450,7 +479,7 @@ async def api_settings_revert(req: PolicyRevert, x_admin_token: Optional[str] = 
 # ---------------------------------------------------------------------------
 
 @app.get("/api/evals/triage")
-async def api_triage_comparison():
+async def api_triage_comparison(_user=LEAD):
     """The latest triage comparison, and which backends can run here.
 
     The comparison is produced offline by `python -m sanwaad.evals.triage_compare`
@@ -480,7 +509,7 @@ class OfferRequest(BaseModel):
 
 
 @app.post("/api/offer")
-async def api_offer(req: OfferRequest):
+async def api_offer(req: OfferRequest, _user=AGENT):
     """Browser SDP offer -> answer, and start the voice pipeline for the case."""
     # Asked first, because the question "can this deployment place a call at
     # all" is answerable without importing anything — and importing pipecat to
@@ -557,6 +586,98 @@ async def api_offer(req: OfferRequest):
 
     answer = connection.get_answer()
     return JSONResponse({"sdp": answer["sdp"], "type": answer["type"]})
+
+
+# ---------------------------------------------------------------------------
+# Accounts
+# ---------------------------------------------------------------------------
+
+def _me(user: Optional[auth.User]) -> dict:
+    if user is None:
+        return {"mode": "accounts" if auth.has_users() else "open", "user": None}
+    return {"mode": "accounts", "user": {"id": user.id, "email": user.email, "name": user.name, "role": user.role}}
+
+
+@app.get("/api/me")
+async def api_me(request: Request):
+    return _me(auth.user_for(request.cookies.get(auth.COOKIE)))
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/login")
+async def api_login(req: LoginRequest, request: Request, response: Response):
+    try:
+        user = auth.authenticate(req.email, req.password)
+    except auth.AuthError as exc:
+        status = 429 if "too many" in str(exc) else 401
+        raise HTTPException(status, str(exc)) from None
+    response.set_cookie(auth.COOKIE, auth.start_session(user), max_age=auth.SESSION_HOURS * 3600,
+                        httponly=True, samesite="strict", secure=request.url.scheme == "https")
+    logger.info(f"sign-in: {user.email} ({user.role})")
+    return _me(user)
+
+
+@app.post("/api/logout")
+async def api_logout(request: Request, response: Response):
+    auth.end_session(request.cookies.get(auth.COOKIE))
+    response.delete_cookie(auth.COOKIE)
+    return {"mode": "accounts" if auth.has_users() else "open", "user": None}
+
+
+class NewUser(BaseModel):
+    email: str
+    name: str
+    role: str = "agent"
+    password: str
+
+
+class UserUpdate(BaseModel):
+    role: Optional[str] = None
+    disabled: Optional[bool] = None
+    password: Optional[str] = None
+
+
+def _account_admin(user: Optional[auth.User]) -> auth.User:
+    if user is None:
+        raise HTTPException(403, "create the first admin from the command line: "
+                                 "python -m sanwaad.auth add-user --role admin ...")
+    return user
+
+
+@app.get("/api/users")
+async def api_users(user=ADMIN):
+    _account_admin(user)
+    return {"users": [{"id": u.id, "email": u.email, "name": u.name, "role": u.role, "disabled": u.disabled}
+                      for u in auth.list_users()]}
+
+
+@app.post("/api/users")
+async def api_add_user(req: NewUser, user=ADMIN):
+    admin = _account_admin(user)
+    try:
+        new = auth.add_user(req.email, req.name, req.role, req.password)
+    except auth.AuthError as exc:
+        raise HTTPException(400, str(exc)) from None
+    logger.warning(f"account created: {new.email} as {new.role} by {admin.email}")
+    return {"id": new.id, "email": new.email, "name": new.name, "role": new.role, "disabled": False}
+
+
+@app.patch("/api/users/{user_id}")
+async def api_update_user(user_id: int, req: UserUpdate, user=ADMIN):
+    admin = _account_admin(user)
+    try:
+        updated = auth.update_user(user_id, role=req.role, disabled=req.disabled, password=req.password)
+    except auth.AuthError as exc:
+        raise HTTPException(400, str(exc)) from None
+    logger.warning(f"account {updated.email} changed by {admin.email}: "
+                   f"{req.model_dump(exclude_none=True, exclude={'password'})}"
+                   f"{' (password reset)' if req.password else ''}")
+    return {"id": updated.id, "email": updated.email, "name": updated.name, "role": updated.role,
+            "disabled": updated.disabled}
 
 
 # ---------------------------------------------------------------------------

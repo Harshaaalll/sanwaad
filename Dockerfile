@@ -46,11 +46,13 @@ COPY . .
 # instead of a minute after boot.
 RUN python -c "from sanwaad.rag.store import get_store; print(len(get_store().clauses), 'clauses indexed')"
 
-# Runtime state — the checkpoint database, traces, the audit log — is written
-# under sanwaad/data. It must be writable by a non-root user, and it is worth a
-# volume if you want cases to survive `docker run --rm`.
-RUN useradd --create-home --uid 10001 sanwaad \
-    && chown -R sanwaad:sanwaad /app/sanwaad/data
+# Runtime state — the checkpoint database, traces, accounts, the audit log — is
+# written under sanwaad/data. It must be writable by a non-root user, and it is
+# worth a volume if you want cases to survive `docker run --rm`.
+# UID 1000 because Hugging Face Spaces runs every container as 1000; with any
+# other id the data directory is read-only there and every write fails.
+RUN useradd --create-home --uid 1000 sanwaad \
+    && chown -R sanwaad:sanwaad /app/sanwaad/data /opt/huggingface
 USER sanwaad
 
 EXPOSE 7870

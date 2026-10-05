@@ -118,7 +118,7 @@ so the explanation can't drift from what happened.
 **Autonomy is earned, and policy changes are on the record.** A reply type
 posts without a person only after reviewers agreed with its drafts often
 enough, and loses that the moment they stop. The thresholds behind every
-decision are on a Policy page; with an admin token, thirteen can change inside
+decision are on a Policy page; an admin can change thirteen of them inside
 hard bounds, each with a reason, an impact preview on stored cases, and an
 append-only, revertible log. The grounding rule and the ban on auto-promised
 compensation can't be changed there at all.
@@ -283,9 +283,29 @@ python -m sanwaad.loop                     # the support loop, pass by pass
 python -m sanwaad.evals.loop_eval --ladder # the MINT ladder
 python -m sanwaad.loop.outer               # the external loop over recorded runs
 python -m sanwaad.evals.triage_compare     # triage models compared on labelled data
-pytest tests/ -q                           # 433 tests, no API key
+pytest tests/ -q                           # 466 tests, no API key
 node --test tests/js/*.test.js                      # the console's own logic (pytest runs it too)
 ```
+
+### A live link for free (GitHub Codespaces)
+
+The repo carries a codespace config, so a cloud machine sets itself up and
+nothing runs on your laptop. On GitHub: **Code → Codespaces → Create codespace
+on main**, wait for the setup to finish, then in its terminal:
+
+```bash
+python -m sanwaad.auth add-user --email you@company.com --name "You" --role admin
+python -m sanwaad.api.server
+```
+
+In the **Ports** tab, right-click port 7870 → **Port visibility → Public**,
+and share the forwarded `https://…app.github.dev` address; visitors get the
+sign-in page. The link works while the codespace runs (it stops after a period
+of inactivity; restart it from GitHub). Accounts and cases persist inside the
+codespace until you delete it.
+
+A Hugging Face Space also works (`scripts/deploy_hf_space.py --space <you>/sanwaad
+--set-admin`), but Docker Spaces now need a PRO subscription.
 
 Or in Docker, where that download already happened at build time:
 
@@ -352,12 +372,31 @@ timeline.
 ### Changing a policy threshold
 
 The console's **Policy** tab shows every threshold that decides a case's
-state. Set `SANWAAD_ADMIN_TOKEN` and thirteen of them become editable: each
+state. An admin can change thirteen of them: each
 inside hard bounds, with a required reason, an impact preview against stored
 cases before Apply appears, and an append-only log (`sanwaad/data/policy_audit.jsonl`)
 that is replayed on start and supports one-click revert. The grounding rule,
 the ban on auto-promised compensation and the autonomy maximum are not
 editable there; the reversal ceiling can only be lowered.
+
+### Accounts and roles
+
+Three roles: **agents** work the case queue; **team leads** also see Overview,
+Model comparison and policy, and load complaints; **admins** also change policy
+and manage accounts in the Team tab. Every decision is recorded under the
+signed-in person's name, taken from the session, never from the browser.
+
+With no accounts the console runs open (a banner says so), which keeps the demo
+working. Create the first admin on the server, and from then on everyone signs in:
+
+```bash
+python -m sanwaad.auth add-user --email you@company.com --name "Your Name" --role admin
+```
+
+Passwords are salted scrypt hashes; sessions are HttpOnly, SameSite=Strict
+cookies whose tokens are stored only as hashes; five wrong passwords lock an
+email out for 15 minutes. Single sign-on (Google, Microsoft) is the planned next
+step: `auth.authenticate` is the one place a person is matched to an account.
 
 ### Working on it with Claude Code
 
@@ -421,7 +460,7 @@ sanwaad/
   api/            FastAPI, review console, call page
   policy/         the knowledge base: plain markdown clauses
   DESIGN.md       the course
-tests/            433 tests
+tests/            466 tests
 scripts/          pre-commit (the test gate for git)
 .claude/          Claude Code settings: the test gate hooks, the /handoff skill
 CLAUDE.md         how to work on this repo, for Claude Code
@@ -482,9 +521,9 @@ private repository.
   decide anything, Laya's latency couldn't be measured on the (swapping) test
   machine, and Jev isn't wired yet; the comparison is meant for your own
   labelled complaints and a live `GOOGLE_API_KEY`.
-- **No login.** The console and its API have no authentication. Policy edits
-  need `SANWAAD_ADMIN_TOKEN`; reviewing, approving and ingesting do not, so
-  don't expose the console beyond people who may approve replies.
+- **Sign-in is built-in accounts only.** Single sign-on isn't there yet, and
+  until the first account is created the console is open to anyone who can
+  reach it.
 - **Offline loop policy.** Without a key, a scripted policy drives the support
   loop. It reads only what a model would see, but it doesn't wander, so offline
   the ladder shows workflows' value only on the misbehaving-agent scenario; the
