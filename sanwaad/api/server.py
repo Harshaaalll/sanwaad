@@ -78,6 +78,14 @@ async def _lifespan(_app: FastAPI):
     # before the first case is decided.
     for problem in policy_store.replay():
         logger.error(f"policy override skipped, default kept: {problem}")
+    try:
+        created = auth.bootstrap_admin_from_env()
+        if created:
+            logger.warning(f"created the first admin, {created.email}, from SANWAAD_ADMIN_EMAIL")
+    except auth.AuthError as exc:
+        # A weak or malformed secret must not take the console down; it stays
+        # open-mode and says why.
+        logger.error(f"SANWAAD_ADMIN_EMAIL/PASSWORD not used: {exc}")
     warm = asyncio.create_task(_warm_index())
     try:
         yield

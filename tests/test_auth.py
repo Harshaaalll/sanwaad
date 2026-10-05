@@ -193,3 +193,30 @@ def test_an_admin_manages_accounts_and_cannot_lock_everyone_out():
 def test_no_cross_origin_requests_are_invited():
     r = _client().get("/api/me", headers={"Origin": "https://evil.example"})
     assert "access-control-allow-origin" not in {k.lower() for k in r.headers}
+
+
+# --- first admin from the host's secret store ------------------------------------------
+
+def test_the_first_admin_can_come_from_environment_secrets(monkeypatch):
+    monkeypatch.setenv("SANWAAD_ADMIN_EMAIL", "Owner@Company.com")
+    monkeypatch.setenv("SANWAAD_ADMIN_PASSWORD", PW)
+    monkeypatch.setenv("SANWAAD_ADMIN_NAME", "Owner")
+    user = auth.bootstrap_admin_from_env()
+    assert (user.email, user.role, user.name) == ("owner@company.com", "admin", "Owner")
+    assert auth.authenticate("owner@company.com", PW) == user
+
+
+def test_environment_secrets_never_touch_an_existing_team(monkeypatch):
+    auth.add_user("real@company.com", "Real", "admin", PW)
+    monkeypatch.setenv("SANWAAD_ADMIN_EMAIL", "intruder@x.com")
+    monkeypatch.setenv("SANWAAD_ADMIN_PASSWORD", PW)
+    assert auth.bootstrap_admin_from_env() is None
+    assert [u.email for u in auth.list_users()] == ["real@company.com"]
+
+
+def test_a_weak_secret_password_is_refused(monkeypatch):
+    monkeypatch.setenv("SANWAAD_ADMIN_EMAIL", "owner@x.com")
+    monkeypatch.setenv("SANWAAD_ADMIN_PASSWORD", "short")
+    with pytest.raises(auth.AuthError, match="at least 10"):
+        auth.bootstrap_admin_from_env()
+    assert not auth.has_users()

@@ -219,6 +219,22 @@ def end_session(token: Optional[str]) -> None:
             conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_token_hash(token),))
 
 
+def bootstrap_admin_from_env() -> Optional[User]:
+    """Create the first admin from SANWAAD_ADMIN_EMAIL / SANWAAD_ADMIN_PASSWORD.
+
+    For hosts with no shell and no persistent disk (a free Hugging Face Space
+    is wiped on every restart), where the CLI cannot run. Set both in the
+    host's secret store, never in a committed file. Does nothing once any
+    account exists, so it can never overwrite or add to a real team.
+    """
+    import os
+
+    email, password = os.getenv("SANWAAD_ADMIN_EMAIL"), os.getenv("SANWAAD_ADMIN_PASSWORD")
+    if not (email and password) or has_users():
+        return None
+    return add_user(email, os.getenv("SANWAAD_ADMIN_NAME") or "Admin", "admin", password)
+
+
 # --- command line -------------------------------------------------------------------
 
 def main(argv: Optional[list[str]] = None) -> int:
